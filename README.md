@@ -8,7 +8,7 @@ New in 0.5.0: sustained Camera2 JPEG capture with a burned-in overlay, controlle
 
 ### 0.4.0 baseline
 
-Camera2 single JPEG capture plus a native HTTP snapshot server owned by an explicit foreground service (SnapshotHttpService), bound explicitly to 0.0.0.0:8080 (all IPv4 interfaces). No Python server or manual export is required for native HTTP. GET and HEAD /snapshot.jpg read the latest private app snapshot. Requests do not trigger capture. No directory listing, continuous video or MJPEG stream is implemented.
+Camera2 single JPEG capture plus a native HTTP snapshot server owned by an explicit foreground service (SnapshotHttpService), bound explicitly to 0.0.0.0:8080 (all IPv4 interfaces). No Python server or manual export is required for native HTTP. GET and HEAD /snapshot.jpg read the latest private app snapshot. Requests do not trigger capture. No directory listing is implemented; see "MJPEG stream and viewer" for the stream added afterwards.
 
 The owner validated the previous capture implementation at 1280x720, retrieved the 31671-byte JPEG and verified byte-identical HTTP transfer through the separate Python helper. The native HTTP integration has not yet been built or tested on the phone. MainActivity's existing status text still identifies the capture component as 0.2.0; APK package metadata is 0.4.0 and native HTTP logs use SnapshotHttp.
 
@@ -26,7 +26,7 @@ Restart semantics: START_NOT_STICKY. If Android kills the process the server sta
 
 A foreground service is not a guarantee. Android may still kill the process, and Doze, battery policy, Wi-Fi power saving or network suspension can make the server unreachable, especially with the screen off. No wake lock, Wi-Fi lock or battery-optimization bypass is used. It does not bypass lock-screen or camera restrictions: capture still needs a visible, resumed, focused activity and runs only on demand; the service never uses the camera. Force-stopping the app stops the service and server. The debuggable APK is for development only.
 
-Requests are sequential, header size is limited to 8192 bytes with a five-second read deadline, and JPEG size is limited to 16 MiB. Slow readers can still block this basic server; it is not production hardened. Camera writes publish the image using the existing temporary-file rename. The server reads an opened snapshot file and never exposes arbitrary paths. No image bytes are logged. Old snapshots survive restarts and failed capture attempts.
+Connections are handled concurrently with explicit limits (see "MJPEG stream and viewer"). Header size is limited to 8192 bytes with a five-second read deadline, and snapshot JPEG size is limited to 16 MiB. Camera writes publish the image using the existing temporary-file rename. The server reads an opened snapshot file and never exposes arbitrary paths. No image bytes are logged. Old snapshots survive restarts and failed capture attempts.
 
 ## Non-touch control over SSH (screen broken / no touch)
 
@@ -254,7 +254,40 @@ adb -s "$TARGET" shell am force-stop local.termux.observatorycamera
 
 scripts/serve-snapshot.py and docs/snapshot-http.md remain for optional isolated testing, not as the normal native serving path. They must use another port if run alongside the APK.
 
-Next: verify native build and LAN access, add authentication, then MJPEG for Motion on Manjaro and an authenticated web settings page. Exposure and focus convergence still need validation; no preview or autofocus convergence routine is implemented. Current JPEG saving is on the main handler.
+Next: verify native build and LAN access, add authentication, validate the MJPEG stream with Motion on Manjaro and add an authenticated web settings page. Exposure and focus convergence still need validation; no preview or autofocus convergence routine is implemented. Current JPEG saving is on the main handler.
+
+## MJPEG stream and viewer
+
+Endpoints (GET; HEAD returns headers only), all on the same port and the same trusted-LAN-only exposure with no authentication or TLS (see the warning above; never expose to the Internet):
+
+- `/snapshot.jpg`: unchanged latest complete snapshot.
+- `/stream.mjpg`: `multipart/x-mixed-replace; boundary=observatoryframe`. Each part is `--observatoryframe`, CRLF, `Content-Type: image/jpeg`, CRLF, `Content-Length: N`, CRLF, CRLF, N JPEG bytes, CRLF. Responses carry `Cache-Control: no-store, no-cache, must-revalidate, max-age=0` and `Pragma: no-cache`.
+- `/`: minimal read-only HTML page showing the stream. No scripts, external assets, settings or control endpoints.
+
+The server only reads the atomically published private snapshot (the burned-in overlay is already in it). HTTP never opens the camera, starts capture or creates per-client camera sessions. Frame rate is whatever the existing capture configuration publishes (target FPS 0.1 to 2.0); no higher rate is promised.
+
+Stream semantics:
+
+- Before the first frame: headers are sent immediately; the client receives nothing until a publication newer than its connection time appears. The snapshot that already existed at connect time is not replayed as a live frame.
+- A frame is sent only when the snapshot file was republished (new file identity) since the previous frame. Unchanged snapshots are never repeated, so a viewer cannot mistake a stale image for live video.
+- Capture stopped, failed or slower than 60 s: after 60 s without a new publication the server sends the closing boundary `--observatoryframe--` and closes the connection. Reload the page or reconnect to resume. A stopped capture therefore shows no further frames, never repeated ones.
+- Client disconnect: detected within about 200 ms (or on write); its thread, socket and stream slot are released.
+- HTTP service stop (or restart): the listener and every client socket are closed, all server threads are joined for at most about 2 s and a later Start begins with fresh state. Nothing restarts automatically.
+
+Resource limits (constants in SnapshotHttpServer): at most 8 simultaneous connections (one thread each, extra connections get 503 and are closed); at most 2 of them may be streams (further streams get 503), so streams cannot occupy all slots and snapshot requests keep being served. Request headers: 8192 bytes, 5 s. A write that does not complete within 10 s (slow or stalled reader) closes that connection. Memory is bounded: each client holds at most one frame in memory (stream frames up to 8 MiB, snapshots up to 16 MiB, larger images are not streamed or served with 503), no queues, frame history or extra files are kept.
+
+Automated tests (`bash test/run.sh`, pure Java, no Android/camera/browser): multipart framing and JPEG decode, new-frame-only behavior, idle end, concurrent snapshot and stream clients, stream and connection limits, disconnects, a non-reading slow client, stop with open streams, repeated restart and thread cleanup. These tests do not validate phones, browsers, Motion or sustained performance.
+
+SSH-only real-device/browser validation checklist (not yet performed; record results yourself; TARGET is your verified ADB target, PHONE_IP the phone LAN address):
+
+1. Start the server with the existing control script; confirm `Listening on 0.0.0.0:8080; endpoints: /, /snapshot.jpg, /stream.mjpg` in logcat.
+2. Start continuous capture; `curl -sS -D - -m 5 http://127.0.0.1:8080/stream.mjpg -o /tmp/s.bin` from an SSH session must show the multipart content type and no-cache headers.
+3. `curl -sS -m 10 http://PHONE_IP:8080/stream.mjpg | head -c 200000 | strings | grep -c Content-Length` from another LAN machine: the count must grow with captured frames.
+4. Open `http://PHONE_IP:8080/` in a desktop browser (ideally via the tunnel `ssh -p SSH_PORT -L 18080:127.0.0.1:8080 PHONE_IP`) and check that the image updates at roughly the configured FPS.
+5. While streaming, repeat `curl -I http://PHONE_IP:8080/snapshot.jpg`; it must stay responsive. Open 3 streams: the third must get 503.
+6. Stop capture: the stream must stop updating and end after about 60 s. Close a client: the next stream must connect.
+7. Stop the HTTP service with the existing script: open streams must close at once and the port must be refused; start again and repeat step 2.
+8. Check `adb -s "$TARGET" logcat -d -s SnapshotHttp:I` and memory (`dumpsys meminfo local.termux.observatorycamera`) after several minutes of streaming; sustained performance and Motion compatibility remain unvalidated until you test them.
 
 ## JPEG orientation
 
