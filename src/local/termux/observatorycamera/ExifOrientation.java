@@ -11,8 +11,8 @@ final class ExifOrientation {
     static int rotationDegrees(int tag) {
         switch (tag) {
             case 3: return 180;
-            case 5: case 8: return 270;
-            case 6: case 7: return 90;
+            case 5: case 6: return 90;
+            case 7: case 8: return 270;
             default: return 0;
         }
     }

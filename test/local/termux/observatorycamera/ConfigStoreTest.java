@@ -39,7 +39,7 @@ public final class ConfigStoreTest {
         // Update, persistence across a new store instance (service restart / app update keeps filesDir).
         check(store.update("overlay=off target_fps=15.5 position=top-right").config != null, "fractional update ok");
         ConfigStore again = new ConfigStore(dir);
-        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps target_fps=15.5 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120"), again.load().config.describe());
+        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps target_fps=15.5 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), again.load().config.describe());
         check(store.update("target_fps=10").config != null
             && new ConfigStore(dir).load().config.targetFpsString().equals("10.0"), "above-9 target persists across store instances");
         String saved = read(live);
@@ -81,6 +81,28 @@ public final class ConfigStoreTest {
         // Missing keys in an import use defaults.
         check(ok.config.targetFpsTenths == 10 && ok.config.position.equals("bottom-left") && ok.config.overlayEnabled, "defaults for missing keys");
         check(ok.config.jpegSize.equals("auto"), "missing JPEG size preserves the legacy default selection");
+        check(ok.config.focusMode.equals("auto") && ok.config.exposureMode.equals("auto")
+            && ok.config.whiteBalance.equals("auto") && ok.config.jpegQuality == 90
+            && ok.config.orientationMode.equals("auto") && !ok.config.mirror,
+            "legacy imports use image-control defaults");
+
+        File controlDir = Files.createTempDirectory("cfg-controls").toFile();
+        try {
+            ConfigStore controlStore = new ConfigStore(controlDir);
+            CameraControlCapabilities fixedControls = new CameraControlCapabilities(java.util.Collections.emptyList(),
+                false, 0f, true, false, 0, 0, null, false, null, null, null, null, 0,
+                java.util.Collections.singletonList("auto"), false);
+            CameraCapabilities fixedCamera = new CameraCapabilities(java.util.Collections.singletonList(
+                new CameraCapabilities.JpegSize(640, 480, 0, 0)), fixedControls);
+            ConfigStore.Outcome unsupportedFocus = controlStore.update("focus_mode=lock", fixedCamera::validate);
+            check(unsupportedFocus.config == null && !new File(controlDir, ConfigStore.FILE_NAME).exists(),
+                "unsupported image-control update does not create or corrupt configuration");
+            ConfigStore.Outcome imageSaved = controlStore.update(
+                "jpeg_quality=55 orientation_mode=manual rotation_degrees=180 mirror=on", fixedCamera::validate);
+            CaptureConfig imageReloaded = new ConfigStore(controlDir).load().config;
+            check(imageSaved.config != null && imageReloaded.jpegQuality == 55 && imageReloaded.rotationDegrees == 180
+                && imageReloaded.mirror, "validated quality and orientation settings persist atomically");
+        } finally { deleteTree(controlDir); }
 
         telemetryDir = Files.createTempDirectory("cfg-telemetry").toFile();
         ConfigStore telemetryStore = new ConfigStore(telemetryDir);

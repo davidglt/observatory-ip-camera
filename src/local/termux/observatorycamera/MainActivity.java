@@ -281,7 +281,7 @@ public final class MainActivity extends Activity {
             ArrayList<CameraCapabilities.JpegSize> jpegSizes = new ArrayList<>();
             for (Size candidate : sizes) jpegSizes.add(new CameraCapabilities.JpegSize(candidate.getWidth(), candidate.getHeight(),
                 map.getOutputMinFrameDuration(ImageFormat.JPEG, candidate), map.getOutputStallDuration(ImageFormat.JPEG, candidate)));
-            CameraCapabilities capabilities = new CameraCapabilities(jpegSizes);
+            CameraCapabilities capabilities = new CameraCapabilities(jpegSizes, CameraCapabilityReader.controls(info));
             CaptureConfig captureConfig = CaptureSettings.load(this);
             String invalid = capabilities.validate(captureConfig);
             if (invalid != null) throw new IllegalArgumentException(invalid);
@@ -307,11 +307,13 @@ public final class MainActivity extends Activity {
                         imageWidth = image.getWidth();
                         imageHeight = image.getHeight();
                     }
-                    FrameOverlay.Result r = FrameOverlay.process(data, CaptureSettings.load(this), Double.NaN, wall, TimeZone.getDefault());
+                    FrameOverlay.Result r = FrameOverlay.process(data, captureConfig, Double.NaN, wall, TimeZone.getDefault());
                     if (r.jpeg.length > CameraCapabilities.MAX_JPEG_BYTES)
                         throw new IOException("JPEG output exceeds the application byte limit.");
                     if (!SnapshotPublisher.publish(getFilesDir(), "snapshot.jpg", r.jpeg, () -> token == generation)) return;
-                    Log.i(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "saved", "bytes=" + r.jpeg.length + " size=" + imageWidth + "x" + imageHeight + " overlay=" + (r.rendered ? "rendered" : "passthrough") + " processing_ms=" + r.processingNanos / 1_000_000L));
+                    ContinuousCaptureService.recordEffectiveImageTransform(captureConfig, r);
+                    String overlayMode = r.rendered ? "rendered" : r.transformed ? "transformed" : "passthrough";
+                    Log.i(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "saved", "bytes=" + r.jpeg.length + " size=" + imageWidth + "x" + imageHeight + " overlay=" + overlayMode + " processing_ms=" + r.processingNanos / 1_000_000L));
                     handler.post(() -> {
                         if (token != generation) return;
                         report("Snapshot saved: " + imageWidth + "x" + imageHeight + ", " + r.jpeg.length + " bytes. File: snapshot.jpg");
@@ -337,13 +339,20 @@ public final class MainActivity extends Activity {
                                     final int snapshotAngle = lastValidDeviceOrientation;
                                     final boolean fallback = snapshotAngle < 0;
                                     final int deviceOrientation = fallback ? 0 : JpegOrientation.roundDeviceOrientation(snapshotAngle);
-                                    final int jpegOrientation = JpegOrientation.calculate(sensorOrientation, deviceOrientation, frontFacing);
+                                    final int jpegOrientation = JpegOrientation.calculate(captureConfig,
+                                        sensorOrientation, deviceOrientation, frontFacing);
                                     request.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation);
+                                    Camera2RequestMapper.apply(request, captureConfig, capabilities.controls,
+                                        selectedSize.minFrameDurationNanos, true);
                                     Log.i(TAG, "JPEG orientation: sensor=" + sensorOrientation + ", device=" + deviceOrientation
                                         + ", jpeg=" + jpegOrientation + ", fallback=" + fallback
                                         + (fallback ? " (no valid reading; assumed device angle 0, not measured)" : " (measured)"));
                                     report("Capturing JPEG...");
                                     configured.capture(request.build(), new CameraCaptureSession.CaptureCallback() {
+                                        @Override public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest r,
+                                                                                 android.hardware.camera2.TotalCaptureResult result) {
+                                            ContinuousCaptureService.recordEffectiveControls(result, captureConfig);
+                                        }
                                         @Override public void onCaptureFailed(CameraCaptureSession s, CaptureRequest r, CaptureFailure failure) {
                                             if (token == generation) fail("Capture failed: " + failure.getReason());
                                         }

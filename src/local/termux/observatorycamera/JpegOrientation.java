@@ -14,4 +14,9 @@ final class JpegOrientation {
         if (frontFacing) device = -device;
         return (sensorOrientation + device + 360) % 360;
     }
+
+    static int calculate(CaptureConfig config, int sensorOrientation, int deviceOrientation, boolean frontFacing) {
+        return config.orientationMode.equals("manual") ? config.rotationDegrees
+            : calculate(sensorOrientation, deviceOrientation, frontFacing);
+    }
 }

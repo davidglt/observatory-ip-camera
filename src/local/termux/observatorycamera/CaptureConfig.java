@@ -36,6 +36,19 @@ public final class CaptureConfig {
     public static final String MQTT_TOPIC = "mqtt_topic";
     public static final String MQTT_TLS = "mqtt_tls";
     public static final String MQTT_STALE_SECONDS = "mqtt_stale_seconds";
+    public static final String FOCUS_MODE = "focus_mode";
+    public static final String FOCUS_DISTANCE_DIOPTERS = "focus_distance_diopters";
+    public static final String EXPOSURE_MODE = "exposure_mode";
+    public static final String EXPOSURE_COMPENSATION = "exposure_compensation";
+    public static final String AE_LOCK = "ae_lock";
+    public static final String ISO = "iso";
+    public static final String EXPOSURE_TIME_NS = "exposure_time_ns";
+    public static final String WHITE_BALANCE = "white_balance";
+    public static final String AWB_LOCK = "awb_lock";
+    public static final String JPEG_QUALITY = "jpeg_quality";
+    public static final String ORIENTATION_MODE = "orientation_mode";
+    public static final String ROTATION_DEGREES = "rotation_degrees";
+    public static final String MIRROR = "mirror";
     public static final int MAX_LOCATION_LENGTH = 24;
 
     public static final int FIELD_LOCATION = 1;
@@ -64,6 +77,10 @@ public final class CaptureConfig {
     private static final Pattern COLOR_PATTERN = Pattern.compile("#[0-9A-Fa-f]{6}");
     private static final Pattern MQTT_HOST_PATTERN = Pattern.compile("[A-Za-z0-9.-]{0,253}");
     private static final Pattern MQTT_TOPIC_PATTERN = Pattern.compile("[A-Za-z0-9_./#+-]{1,128}");
+    private static final Pattern FOCUS_DISTANCE_PATTERN = Pattern.compile("[0-9]+(\\.[0-9]{1,6})?");
+    private static final String[] FOCUS_MODES = {"auto", "lock", "manual", "continuous-picture", "continuous-video", "macro", "edof"};
+    private static final String[] WHITE_BALANCE_MODES = {"auto", "incandescent", "fluorescent", "warm-fluorescent", "daylight",
+        "cloudy-daylight", "twilight", "shade"};
 
     public final boolean overlayEnabled;
     public final String location;
@@ -86,13 +103,30 @@ public final class CaptureConfig {
     public final String mqttTopic;
     public final boolean mqttTls;
     public final int mqttStaleSeconds;
+    public final String focusMode;
+    public final float focusDistanceDiopters;
+    public final String exposureMode;
+    public final int exposureCompensation;
+    public final boolean aeLock;
+    public final int iso;
+    public final long exposureTimeNanos;
+    public final String whiteBalance;
+    public final boolean awbLock;
+    public final int jpegQuality;
+    public final String orientationMode;
+    public final int rotationDegrees;
+    public final boolean mirror;
 
     private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields,
                           long targetFpsTenths, String jpegSize, String textColor, String telemetryPosition,
                           boolean panelEnabled, String panelTextColor,
                           String panelBackgroundColor, int panelTextSize, boolean panelEnvironment,
                           boolean panelDevice, boolean panelCapture, String mqttHost, int mqttPort,
-                          String mqttTopic, boolean mqttTls, int mqttStaleSeconds) {
+                          String mqttTopic, boolean mqttTls, int mqttStaleSeconds, String focusMode,
+                          float focusDistanceDiopters, String exposureMode, int exposureCompensation,
+                          boolean aeLock, int iso, long exposureTimeNanos, String whiteBalance,
+                          boolean awbLock, int jpegQuality, String orientationMode, int rotationDegrees,
+                          boolean mirror) {
         this.overlayEnabled = overlayEnabled;
         this.location = location;
         this.position = position;
@@ -114,13 +148,27 @@ public final class CaptureConfig {
         this.mqttTopic = mqttTopic;
         this.mqttTls = mqttTls;
         this.mqttStaleSeconds = mqttStaleSeconds;
+        this.focusMode = focusMode;
+        this.focusDistanceDiopters = focusDistanceDiopters;
+        this.exposureMode = exposureMode;
+        this.exposureCompensation = exposureCompensation;
+        this.aeLock = aeLock;
+        this.iso = iso;
+        this.exposureTimeNanos = exposureTimeNanos;
+        this.whiteBalance = whiteBalance;
+        this.awbLock = awbLock;
+        this.jpegQuality = jpegQuality;
+        this.orientationMode = orientationMode;
+        this.rotationDegrees = rotationDegrees;
+        this.mirror = mirror;
     }
 
     /** Conservative defaults: overlay on, NYX, bottom-left, size 24 (at 720 px short side), all visible fields, 1.0 FPS target. */
     public static CaptureConfig defaults() {
         return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10, "auto",
             TEXT_COLOR_GREEN, "right", true, "#FF0000", "#000000", 16, true, true, true,
-            "", 1883, "homeassistant/nyx/reading", false, 120);
+            "", 1883, "homeassistant/nyx/reading", false, 120, "auto", 0f, "auto", 0, false,
+            100, 10_000_000L, "auto", false, 90, "auto", 0, false);
     }
 
     /** Result of parsing: exactly one of config and error is non-null. */
@@ -153,6 +201,19 @@ public final class CaptureConfig {
         String mqttTopic;
         boolean mqttTls;
         int mqttStaleSeconds;
+        String focusMode;
+        float focusDistanceDiopters;
+        String exposureMode;
+        int exposureCompensation;
+        boolean aeLock;
+        int iso;
+        long exposureTimeNanos;
+        String whiteBalance;
+        boolean awbLock;
+        int jpegQuality;
+        String orientationMode;
+        int rotationDegrees;
+        boolean mirror;
         Draft(CaptureConfig c) {
             overlay = c.overlayEnabled; location = c.location; position = c.position;
             textSize = c.textSize; fields = c.fields; fps = c.targetFpsTenths; jpegSize = c.jpegSize;
@@ -162,12 +223,19 @@ public final class CaptureConfig {
             panelEnvironment = c.panelEnvironment; panelDevice = c.panelDevice; panelCapture = c.panelCapture;
             mqttHost = c.mqttHost; mqttPort = c.mqttPort; mqttTopic = c.mqttTopic; mqttTls = c.mqttTls;
             mqttStaleSeconds = c.mqttStaleSeconds;
+            focusMode = c.focusMode; focusDistanceDiopters = c.focusDistanceDiopters;
+            exposureMode = c.exposureMode; exposureCompensation = c.exposureCompensation; aeLock = c.aeLock;
+            iso = c.iso; exposureTimeNanos = c.exposureTimeNanos; whiteBalance = c.whiteBalance;
+            awbLock = c.awbLock; jpegQuality = c.jpegQuality; orientationMode = c.orientationMode;
+            rotationDegrees = c.rotationDegrees; mirror = c.mirror;
         }
         CaptureConfig build() {
             return new CaptureConfig(overlay, location, position, textSize, fields, fps, jpegSize,
                 textColor, telemetryPosition, panelEnabled, panelTextColor, panelBackgroundColor,
                 panelTextSize, panelEnvironment,
-                panelDevice, panelCapture, mqttHost, mqttPort, mqttTopic, mqttTls, mqttStaleSeconds);
+                panelDevice, panelCapture, mqttHost, mqttPort, mqttTopic, mqttTls, mqttStaleSeconds,
+                focusMode, focusDistanceDiopters, exposureMode, exposureCompensation, aeLock, iso,
+                exposureTimeNanos, whiteBalance, awbLock, jpegQuality, orientationMode, rotationDegrees, mirror);
         }
     }
 
@@ -278,6 +346,69 @@ public final class CaptureConfig {
                 d.mqttStaleSeconds = seconds;
                 return null;
             }
+            case FOCUS_MODE:
+                if (!contains(FOCUS_MODES, value)) return "invalid-focus_mode:expected-" + String.join("|", FOCUS_MODES);
+                d.focusMode = value;
+                return null;
+            case FOCUS_DISTANCE_DIOPTERS: {
+                if (!FOCUS_DISTANCE_PATTERN.matcher(value).matches()) return "invalid-focus_distance_diopters:expected-nonnegative-diopters";
+                try { d.focusDistanceDiopters = Float.parseFloat(value); }
+                catch (NumberFormatException e) { return "invalid-focus_distance_diopters:outside-representable-range"; }
+                if (!Float.isFinite(d.focusDistanceDiopters))
+                    return "invalid-focus_distance_diopters:outside-representable-range";
+                return null;
+            }
+            case EXPOSURE_MODE:
+                if (!value.equals("auto") && !value.equals("manual")) return "invalid-exposure_mode:expected-auto-or-manual";
+                d.exposureMode = value;
+                return null;
+            case EXPOSURE_COMPENSATION: {
+                int n = parseSignedInt(value);
+                if (n == Integer.MIN_VALUE) return "invalid-exposure_compensation:expected-signed-camera-step";
+                d.exposureCompensation = n;
+                return null;
+            }
+            case AE_LOCK:
+            case AWB_LOCK:
+            case MIRROR:
+                if (!value.equals("on") && !value.equals("off")) return "invalid-" + key + ":expected-on-or-off";
+                if (key.equals(AE_LOCK)) d.aeLock = value.equals("on");
+                else if (key.equals(AWB_LOCK)) d.awbLock = value.equals("on");
+                else d.mirror = value.equals("on");
+                return null;
+            case ISO: {
+                int n = parseBoundedInt(value, 9);
+                if (n < 1) return "invalid-iso:expected-positive-integer";
+                d.iso = n;
+                return null;
+            }
+            case EXPOSURE_TIME_NS: {
+                long n = parsePositiveLong(value);
+                if (n <= 0) return "invalid-exposure_time_ns:expected-positive-nanoseconds";
+                d.exposureTimeNanos = n;
+                return null;
+            }
+            case WHITE_BALANCE:
+                if (!contains(WHITE_BALANCE_MODES, value))
+                    return "invalid-white_balance:expected-" + String.join("|", WHITE_BALANCE_MODES);
+                d.whiteBalance = value;
+                return null;
+            case JPEG_QUALITY: {
+                int n = parseBoundedInt(value, 3);
+                if (n < 1 || n > 100) return "invalid-jpeg_quality:expected-1-100";
+                d.jpegQuality = n;
+                return null;
+            }
+            case ORIENTATION_MODE:
+                if (!value.equals("auto") && !value.equals("manual"))
+                    return "invalid-orientation_mode:expected-auto-or-manual";
+                d.orientationMode = value;
+                return null;
+            case ROTATION_DEGREES:
+                if (!value.equals("0") && !value.equals("90") && !value.equals("180") && !value.equals("270"))
+                    return "invalid-rotation_degrees:expected-0-90-180-270";
+                d.rotationDegrees = Integer.parseInt(value);
+                return null;
             default:
                 return "unknown-key:" + safe(key);
         }
@@ -307,7 +438,7 @@ public final class CaptureConfig {
      * their defaults; unknown keys, bad values and oversized sets are rejected as a whole.
      */
     public static Parsed fromEntries(Map<String, String> entries) {
-        if (entries.size() > 32) return new Parsed(null, "too-many-keys");
+        if (entries.size() > 48) return new Parsed(null, "too-many-keys");
         Draft draft = new Draft(defaults());
         for (Map.Entry<String, String> e : entries.entrySet()) {
             String value = e.getValue();
@@ -321,7 +452,7 @@ public final class CaptureConfig {
     /** Applies a complete set of decoded properties without parsing shell assignment syntax. */
     public static Parsed updateEntries(Map<String, String> entries, CaptureConfig base) {
         if (entries == null || entries.isEmpty()) return new Parsed(null, "no-assignments");
-        if (entries.size() > 32) return new Parsed(null, "too-many-keys");
+        if (entries.size() > 48) return new Parsed(null, "too-many-keys");
         Draft draft = new Draft(base);
         for (Map.Entry<String, String> e : entries.entrySet()) {
             String value = e.getValue();
@@ -355,6 +486,19 @@ public final class CaptureConfig {
         m.put(MQTT_TOPIC, mqttTopic);
         m.put(MQTT_TLS, mqttTls ? "on" : "off");
         m.put(MQTT_STALE_SECONDS, Integer.toString(mqttStaleSeconds));
+        m.put(FOCUS_MODE, focusMode);
+        m.put(FOCUS_DISTANCE_DIOPTERS, Float.toString(focusDistanceDiopters));
+        m.put(EXPOSURE_MODE, exposureMode);
+        m.put(EXPOSURE_COMPENSATION, Integer.toString(exposureCompensation));
+        m.put(AE_LOCK, aeLock ? "on" : "off");
+        m.put(ISO, Integer.toString(iso));
+        m.put(EXPOSURE_TIME_NS, Long.toString(exposureTimeNanos));
+        m.put(WHITE_BALANCE, whiteBalance);
+        m.put(AWB_LOCK, awbLock ? "on" : "off");
+        m.put(JPEG_QUALITY, Integer.toString(jpegQuality));
+        m.put(ORIENTATION_MODE, orientationMode);
+        m.put(ROTATION_DEGREES, Integer.toString(rotationDegrees));
+        m.put(MIRROR, mirror ? "on" : "off");
         return m;
     }
 
@@ -418,6 +562,16 @@ public final class CaptureConfig {
     private static int parseBoundedInt(String value, int digits) {
         if (!value.matches("[0-9]{1," + digits + "}")) return -1;
         try { return Integer.parseInt(value); } catch (NumberFormatException e) { return -1; }
+    }
+
+    private static int parseSignedInt(String value) {
+        if (!value.matches("-?[0-9]{1,4}")) return Integer.MIN_VALUE;
+        try { return Integer.parseInt(value); } catch (NumberFormatException e) { return Integer.MIN_VALUE; }
+    }
+
+    private static long parsePositiveLong(String value) {
+        if (!value.matches("[0-9]{1,19}")) return -1;
+        try { return Long.parseLong(value); } catch (NumberFormatException e) { return -1; }
     }
 
     private static boolean validMqttHost(String host) {

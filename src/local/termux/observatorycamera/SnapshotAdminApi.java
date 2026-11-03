@@ -62,7 +62,13 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
             .append("\",\"metadata_estimate_fps\":\"").append(json(ContinuousCaptureService.metadataEstimateFps()))
             .append("\",\"capture_state\":\"").append(json(status.state))
             .append("\",\"reload_error\":\"").append(json(ContinuousCaptureService.reloadError() == null ? "" : ContinuousCaptureService.reloadError()))
-            .append("\",\"file_state\":\"").append(json(CaptureSettings.store(context).load().fileState)).append("\"");
+            .append("\",\"effective_controls\":")
+            .append(ContinuousCaptureService.effectiveControls() == null ? "null" : ContinuousCaptureService.effectiveControls())
+            .append(",\"last_capture_request\":")
+            .append(ContinuousCaptureService.effectiveControlRequest() == null ? "null" : ContinuousCaptureService.effectiveControlRequest())
+            .append(",\"effective_image_transform\":")
+            .append(ContinuousCaptureService.effectiveImageTransform() == null ? "null" : ContinuousCaptureService.effectiveImageTransform())
+            .append(",\"file_state\":\"").append(json(CaptureSettings.store(context).load().fileState)).append("\"");
         if (error != null) out.append(",\"error\":\"").append(json(error)).append('"');
         return out.append('}').toString();
     }
@@ -92,7 +98,45 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
                 .append(",\"estimate_fps\":\"").append(size.hasTimingEstimate() ? CameraCapabilities.formatFps(estimate) : "unknown")
                 .append("\"}");
         }
-        return out.append("]}").toString();
+        return out.append("],\"controls\":").append(controlsJson(capabilities.controls)).append('}').toString();
+    }
+
+    private String controlsJson(CameraControlCapabilities c) {
+        if (c == null) return "{}";
+        StringBuilder out = new StringBuilder("{\"focus\":{\"fixed_focus\":").append(c.fixedFocus())
+            .append(",\"focus_lock\":").append(c.focusLockSupported)
+            .append(",\"manual_focus\":").append(c.manualFocusSupported())
+            .append(",\"automatic\":").append(c.autofocusSupported())
+            .append(",\"minimum_focus_distance_diopters\":")
+            .append(c.manualFocusSupported() ? Float.toString(c.minimumFocusDistanceDiopters) : "null")
+            .append(",\"modes\":[");
+        boolean first = true;
+        for (String mode : c.focusChoices()) {
+            if (!first) out.append(',');
+            first = false;
+            out.append('"').append(json(mode)).append('"');
+        }
+        out.append("]},\"exposure\":{\"auto\":").append(c.autoExposureSupported)
+            .append(",\"ae_lock\":").append(c.aeLockSupported)
+            .append(",\"compensation_min\":").append(!c.exposureCompensationSupported() ? "null" : c.exposureCompensationMinimum)
+            .append(",\"compensation_max\":").append(!c.exposureCompensationSupported() ? "null" : c.exposureCompensationMaximum)
+            .append(",\"compensation_step_ev\":").append(!c.exposureCompensationSupported() || c.exposureCompensationStep == null
+                ? "null" : "\"" + json(c.exposureCompensationStep) + "\"")
+            .append(",\"manual_sensor\":").append(c.manualSensorSupported)
+            .append(",\"iso_min\":").append(!c.manualSensorSupported ? "null" : c.minimumIso)
+            .append(",\"iso_max\":").append(!c.manualSensorSupported ? "null" : c.maximumIso)
+            .append(",\"exposure_time_min_ns\":").append(!c.manualSensorSupported ? "null" : c.minimumExposureTimeNanos)
+            .append(",\"exposure_time_max_ns\":").append(!c.manualSensorSupported ? "null" : c.maximumExposureTimeNanos)
+            .append(",\"maximum_frame_duration_ns\":").append(!c.manualSensorSupported || c.maximumFrameDurationNanos <= 0
+                ? "null" : c.maximumFrameDurationNanos)
+            .append("},\"white_balance\":{\"modes\":[");
+        first = true;
+        for (String mode : c.whiteBalanceModes) {
+            if (!first) out.append(',');
+            first = false;
+            out.append('"').append(json(mode)).append('"');
+        }
+        return out.append("],\"lock\":").append(c.awbLockSupported).append("}}").toString();
     }
 
     private static Map<String, String> decodeForm(byte[] body) throws CharacterCodingException {
