@@ -125,12 +125,28 @@ public final class SnapshotHttpServerTest {
                 && viewerText.contains("Manual exposure time (ns)")
                 && viewerText.contains("White balance")
                 && viewerText.contains("JPEG quality")
-                && viewerText.contains("Horizontal mirror (fixed installation)")
+                && viewerText.contains("Horizontal mirror")
                 && viewerText.contains("p.set('focus_distance_diopters','0')")
                 && viewerText.contains("p.set('exposure_compensation','0');p.set('ae_lock','off')")
                 && viewerText.contains("p.set('awb_lock','off')")
                 && viewerText.contains("Saved."),
                 "image controls use queried capabilities, explicit units, and a short save acknowledgement");
+            check(viewerText.contains("<legend>Capture</legend>")
+                && viewerText.contains("<legend>Image controls</legend>")
+                && viewerText.contains("<legend>Orientation</legend>")
+                && viewerText.contains("<legend>Image overlay</legend>")
+                && viewerText.contains("<legend>Telemetry panel</legend>")
+                && viewerText.contains("<legend>MQTT / Environmental sensor</legend>")
+                && viewerText.contains("settings-section") && viewerText.contains("@media(max-width:600px)"),
+                "settings are grouped into titled sections with narrow-screen columns");
+            check(viewerText.contains("text.textContent=String(value)")
+                && viewerText.contains("['FPS',d.actual_fps+' / '+d.requested_fps]")
+                && viewerText.contains("margin-left:4ch;white-space:normal;overflow-wrap:anywhere")
+                && viewerText.contains(".telemetry-group+.telemetry-group{border-top:1px solid currentColor")
+                && viewerText.contains("new ResizeObserver(layoutTelemetryRows)")
+                && viewerText.contains("window.addEventListener('resize',layoutTelemetryRows)")
+                && viewerText.contains("panel.style.fontSize=d.panel_text_size+'px'"),
+                "telemetry keeps complete values together, wraps indented rows, separates visible groups, and remeasures");
             check(indexOf(request(port, "GET", "/api/config"), "401 Unauthorized") > 0, "admin API requires bearer token");
             String auth = "Authorization: Bearer " + token + "\r\n";
             check(indexOf(request(port, "GET", "/api/config", auth, new byte[0]), "200 OK") > 0, "authenticated GET");
