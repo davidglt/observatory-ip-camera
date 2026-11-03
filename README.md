@@ -78,4 +78,22 @@ adb -s "$TARGET" shell am force-stop local.termux.observatorycamera
 
 scripts/serve-snapshot.py and docs/snapshot-http.md remain for optional isolated testing, not as the normal native serving path. They must use another port if run alongside the APK.
 
-Next: verify native build and LAN access, add authentication and explicit server controls, then continuous capture, a properly permissioned foreground service and MJPEG for Motion on Manjaro. Image orientation, exposure and focus convergence still need validation; no preview or autofocus convergence routine is implemented. Current JPEG saving is on the main handler.
+Next: verify native build and LAN access, add authentication and explicit server controls, then continuous capture, a properly permissioned foreground service and MJPEG for Motion on Manjaro. Exposure and focus convergence still need validation; no preview or autofocus convergence routine is implemented. Current JPEG saving is on the main handler.
+
+## JPEG orientation
+
+The app sets Camera2 JPEG_ORIENTATION from the physical device angle (OrientationEventListener, rounded to 90 degrees) and the rear camera SENSOR_ORIENTATION: (sensor + device + 360) % 360, with the device angle negated for a front-facing sensor. Display rotation is not used. The last valid angle is kept across pause and activity recreation. With no valid reading yet (cold start) the app logs a fallback (device angle 0, sensor-only behavior); that is not measured orientation. The angle is snapshotted when the capture request is built, and logcat shows sensor, device, JPEG angle and fallback use.
+
+Camera2 JPEG bytes are saved unchanged (no bitmap rotation or re-encoding). The camera HAL may either rotate the pixels or set the EXIF orientation tag; use a viewer that honors EXIF. Snapshots taken before this change must be recaptured. Orientation is ambiguous when the device lies flat (the sensor reports unknown), so the last valid angle is used.
+
+Calculation tests (no Gradle): `bash test/run.sh`. This project was not compiled against the Android API in the authoring environment; run `bash build.sh` in Termux.
+
+Manual validation on the phone: capture and fetch the HTTP snapshot in a viewer honoring EXIF; it must appear upright in each case:
+1. Portrait.
+2. Landscape (rotated left) and landscape (rotated right).
+3. Reverse portrait.
+4. With screen auto-rotation locked, repeat the above; results must follow the physical device angle.
+5. Cold start: force-stop, launch with --ez capture true while flat; logcat must say fallback=true. Tilt the phone upright, capture again; fallback=false.
+6. Pause and return: rotate, background the app, resume, capture; the last angle is preserved until a new reading arrives.
+
+Check with: `adb -s "$TARGET" logcat -d -v time -s ObservatoryCamera:I '*:S' | grep "JPEG orientation"`
