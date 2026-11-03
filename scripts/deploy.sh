@@ -47,9 +47,11 @@ Modes (default: run tests, build, install, verify):
 Options:
   -s, --target SERIAL  explicit adb target (else TARGET, else the single authorized device)
   --refresh-target     ignore a stale TARGET and re-resolve (see scripts/adb-target.sh)
-  --mdns               opt-in reconnect of an already paired wireless device via adb mdns services
+  --mdns               opt-in local IPv4 discovery/reconnection via adb mdns services (or external
+                       Python zeroconf only when adb explicitly reports mDNS unsupported)
   --wireless-on        opt-in bounded `wireless-debugging on` recovery if no usable device is found
-                       when combined with --mdns, mdns is tried first; ambiguous mdns is rejected
+                       when combined with --mdns, discovery is tried first; no services permits
+                       local-phone activation, but backend failures and ambiguity do not
   --git-update         first run `git fetch` + `git merge --ff-only` of origin/main; requires a clean
                        tree on branch main whose origin matches the expected repository
   -h, --help           this help
@@ -58,7 +60,7 @@ Exit codes: 0 ok, 2 usage, 20 prerequisites, 21 git, 22 signing identity, 23 tes
   30 stale/unvalidated artifact.
 Logs: private, bounded, timestamped, in $XDG_STATE_HOME/observatory-ip-camera/logs (default
   ~/.local/state/observatory-ip-camera/logs). Environment: ADB, TARGET, DEPLOY_STATE_DIR,
-  DEPLOY_REMOTE_PATTERN.
+  DEPLOY_REMOTE_PATTERN, ADB_DISCOVERY_PYTHON, ADB_MDNS_TIMEOUT.
 USAGE
 }
 

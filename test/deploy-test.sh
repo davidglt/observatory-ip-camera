@@ -8,7 +8,7 @@ T=$(mktemp -d "${TMPDIR:-/tmp}/deploy test.XXXXXX")
 trap 'rm -rf "$T"' EXIT
 R="$T/repo dir"
 mkdir -p "$R/scripts" "$R/test" "$T/bin" "$T/home/.local/share/observatory-ip-camera/signing"
-cp scripts/adb-target.sh scripts/deploy.sh "$R/scripts/"
+cp scripts/adb-target.sh scripts/adb-mdns-discover.py scripts/deploy.sh "$R/scripts/"
 cat > "$R/build.sh" <<'B'
 #!/usr/bin/env bash
 cd "$(dirname "$0")"; mkdir -p dist
@@ -50,6 +50,7 @@ D="$R/scripts/deploy.sh"
 fails=0
 reset() {
     printf 'A1 device\n' > "$FAKE_DEVICES"; : > "$FAKE_LOG"; rm -f "$FAKE_LOG.bad" "$R/dist/"* "$R/dist/".deploy-stamp
+    : > "$FAKE_MDNS"
     : > "$FAKE_WIRELESS_LOG"; unset FAKE_WIRELESS_MODE FAKE_WIRELESS_DEVICE
     echo k > "$SIGN/identity.p12"; echo p > "$SIGN/password"
     unset FAKE_AAPT_LINE FAKE_AAPT_FAIL FAKE_BUILD_FAIL FAKE_TEST_FAIL FAKE_INSTALL FAKE_INSTALLED FAKE_APK_CONTENT; export FAKE_VERSION="0.5.0 5"
@@ -149,5 +150,8 @@ check "dirty status reported" 0 'dirty: no' --test-only
 echo x > "$R/untracked"; check "dirty status reported" 0 'dirty: yes' --test-only; rm "$R/untracked"
 reset; : > "$FAKE_DEVICES"; FAKE_WIRELESS_DEVICE="A1 device" check "deploy forwards explicit wireless recovery" 0 'result: SUCCESS' --refresh-target --wireless-on
 grep -qx 'on' "$FAKE_WIRELESS_LOG" && echo "ok: deploy forwarded wireless recovery once" || { echo "FAIL: deploy did not forward wireless recovery"; fails=$((fails+1)); }
+reset; : > "$FAKE_DEVICES"; printf 'List\nservice\t_adb-tls-connect._tcp.\t192.168.1.20:41234\n' > "$FAKE_MDNS"
+check "deploy forwards mDNS discovery" 0 'result: SUCCESS' --mdns
+grep -qx 'connect 192.168.1.20:41234' "$FAKE_LOG" && echo "ok: deploy forwarded mDNS discovery" || { echo "FAIL: deploy did not forward mDNS"; fails=$((fails+1)); }
 check "unknown option" 2 'unknown option' --bogus
 exit $(( fails > 0 ))

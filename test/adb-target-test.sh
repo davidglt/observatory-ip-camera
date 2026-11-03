@@ -20,6 +20,70 @@ esac
 echo "fake wrapper human-readable output"
 WIRELESS
 chmod +x "$T/wireless-debugging"
+mkdir -p "$T/zeroconf"
+cat > "$T/zeroconf/zeroconf.py" <<'PY'
+import os
+
+def mark(value):
+    with open(os.environ["FAKE_ZC_MARKER"], "a") as output:
+        output.write(value + "\n")
+
+class IPVersion:
+    V4Only = "v4"
+
+class Info:
+    def __init__(self, port, addresses):
+        self.port = port
+        self.addresses = addresses
+    def parsed_addresses(self, _version):
+        return self.addresses
+
+class Zeroconf:
+    def __init__(self, **_kwargs):
+        mark("created")
+    def get_service_info(self, _type, name, timeout):
+        mode = os.environ.get("FAKE_ZC_MODE")
+        if mode == "timeout":
+            return None
+        if mode in ("backend-fail", "resolve-fail"):
+            raise RuntimeError("mock resolution failure")
+        entries = {
+            "valid": {"one": (41234, ["192.168.1.20"])},
+            "duplicate": {"one": (41234, ["192.168.1.20"]), "two": (41234, ["192.168.1.20"])},
+            "multiple": {"one": (41234, ["192.168.1.20"]), "two": (41235, ["192.168.1.21"])},
+            "bad-port": {"one": (65536, ["192.168.1.20"])},
+            "bad-address": {"one": (41234, ["999.1.1.1", "8.8.8.8"])},
+        }
+        port, addresses = entries[mode][name]
+        return Info(port, addresses)
+    def close(self):
+        mark("closed")
+
+class ServiceBrowser:
+    def __init__(self, _zeroconf, _type, listener):
+        mode = os.environ.get("FAKE_ZC_MODE")
+        if mode == "browser-fail":
+            raise RuntimeError("mock browser failure")
+        services = {
+            "valid": ["one"],
+            "duplicate": ["one", "two"],
+            "multiple": ["one", "two"],
+            "bad-port": ["one"],
+            "bad-address": ["one"],
+            "timeout": ["stuck"],
+            "resolve-fail": ["stuck"],
+        }
+        for name in services.get(mode, []):
+            listener.add_service(None, None, name)
+        mark("browser")
+    def cancel(self):
+        mark("cancelled")
+PY
+cat > "$T/python-stdlib" <<PY
+#!/usr/bin/env bash
+exec env -u PYTHONPATH "$(command -v python3)" -S "\$@"
+PY
+chmod +x "$T/python-stdlib"
 export PATH="$T:$PATH"
 export ADB="$T/adb"
 unset TARGET
@@ -28,7 +92,13 @@ fails=0
 setdev() {
     : > "$FAKE_LOG"; : > "$FAKE_WIRELESS_LOG"; rm -f "$FAKE_LOG.bad"
     printf '%s\n' "$@" > "$FAKE_DEVICES"; : > "$FAKE_MDNS"
-    unset FAKE_MDNS_UNSUPPORTED FAKE_WIRELESS_MODE FAKE_WIRELESS_DEVICE ADBT_WIRELESS_ON_TIMEOUT
+    unset FAKE_MDNS_UNSUPPORTED FAKE_MDNS_FAIL FAKE_WIRELESS_MODE FAKE_WIRELESS_DEVICE ADBT_WIRELESS_ON_TIMEOUT
+    unset ADB_DISCOVERY_PYTHON ADB_MDNS_TIMEOUT PYTHONPATH FAKE_ZC_MODE FAKE_ZC_MARKER FAKE_CONNECT_STATE FAKE_CONNECT_EXTRA
+}
+mock_zeroconf() {
+    export FAKE_ZC_MODE=$1 ADB_DISCOVERY_PYTHON=python3 PYTHONPATH="$T/zeroconf"
+    export FAKE_ZC_MARKER="$T/zeroconf-resources" ADB_MDNS_TIMEOUT="${2:-1}"
+    : > "$FAKE_ZC_MARKER"
 }
 check() { # name expected_rc expected_stdout stderr_pattern -- cmd...
     local name=$1 rc_want=$2 out_want=$3 pat=$4; shift 4
@@ -73,17 +143,86 @@ unset TARGET
 setdev
 printf 'List of discovered mdns services\nadb-XYZ\t_adb-tls-connect._tcp.\t192.168.1.20:41234\n' > "$FAKE_MDNS"
 check "no mdns without flag" 10 "" 'no device found' run
-check "mdns reconnect" 0 192.168.1.20:41234 'reconnecting' run --mdns
+check "mdns reconnect" 0 192.168.1.20:41234 'connecting to discovered' run --mdns
 grep -qx 'connect 192.168.1.20:41234' "$FAKE_LOG" || { echo "FAIL: mdns connect call"; fails=$((fails+1)); }
+grep -q 'target=192.168.1.20:41234.*model=FakePhone' "$T/err" && echo "ok: mdns target identity verified" || { echo "FAIL: mdns identity missing"; fails=$((fails+1)); }
+setdev
+export TARGET=STALE
+check "stale TARGET blocks mDNS without refresh" 10 "" 'existing TARGET is not usable.*--refresh' run --mdns
+! grep -q '^mdns ' "$FAKE_LOG" && echo "ok: stale TARGET did not trigger mDNS" || { echo "FAIL: stale TARGET triggered mDNS"; fails=$((fails+1)); }
+setdev
+export TARGET=STALE
+printf 'List\nservice\t_adb-tls-connect._tcp.\t192.168.1.20:41234\n' > "$FAKE_MDNS"
+check "refresh re-resolves stale TARGET through mDNS" 0 192.168.1.20:41234 'TARGET changes from .STALE. to .192.168.1.20:41234.' run --refresh --mdns
+unset TARGET
 setdev
 printf 'a\t_adb-tls-connect._tcp.\t192.168.1.20:1\nb\t_adb-tls-connect._tcp.\t192.168.1.21:2\n' > "$FAKE_MDNS"
-check "several mdns refused" 11 "" 'several wireless' run --mdns
+check "several mdns refused" 11 "" 'several local wireless' run --mdns
 setdev
 printf 'a\t_adb-tls-connect._tcp.\t8.8.8.8:1\nc\t_adb-tls-pairing._tcp.\t192.168.1.5:2\n' > "$FAKE_MDNS"
-check "non-local/pairing mdns ignored" 10 "" 'non-local' run --mdns
+check "non-local/pairing mdns ignored" 14 "" 'non-local' run --mdns
 setdev
-FAKE_MDNS_UNSUPPORTED=1 check "unsupported adb mdns is actionable" 10 "" 'does not support mdns services' run --mdns
+printf 'a\t_adb-tls-connect._tcp.\t192.168.1.20:65536\nb\t_adb-tls-connect._tcp.\t999.1.1.1:1234\n' > "$FAKE_MDNS"
+check "native adb malformed ports and addresses rejected" 14 "" 'none had a valid local endpoint' run --mdns
+setdev
+FAKE_MDNS_UNSUPPORTED=1 ADB_DISCOVERY_PYTHON="$T/no-python" check "missing Python for unsupported adb mdns" 14 "" 'Python interpreter not found' run --mdns
 [[ ! -s $FAKE_WIRELESS_LOG ]] && echo "ok: unsupported mdns does not activate wireless debugging" || { echo "FAIL: mdns implicitly activated wireless debugging"; fails=$((fails+1)); }
+setdev
+FAKE_MDNS_FAIL=1 check "failing adb mdns backend is reported" 14 "" 'backend failed.*unavailable' run --mdns
+setdev
+check "native adb mdns with zero services does not use fallback" 10 "" 'discovered no ADB services' run --mdns
+setdev
+check "explicit target never invokes mdns discovery" 10 "" 'not found' run -s MISSING --mdns
+! grep -q '^mdns ' "$FAKE_LOG" && echo "ok: explicit target preserved without discovery" || { echo "FAIL: explicit target invoked mDNS"; fails=$((fails+1)); }
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf valid
+check "zeroconf fallback resolves valid local endpoint" 0 192.168.1.20:41234 'discovered local ADB mDNS endpoint' run --mdns
+grep -qx 'connect 192.168.1.20:41234' "$FAKE_LOG" && echo "ok: fallback connects only resolved endpoint" || { echo "FAIL: fallback connect target"; fails=$((fails+1)); }
+[[ $(wc -l < "$FAKE_ZC_MARKER") -eq 4 ]] && grep -qx cancelled "$FAKE_ZC_MARKER" && grep -qx closed "$FAKE_ZC_MARKER" && echo "ok: zeroconf resources closed" || { echo "FAIL: zeroconf resources not closed"; cat "$FAKE_ZC_MARKER"; fails=$((fails+1)); }
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf zero
+check "zeroconf zero services distinct from backend failure" 10 "" 'no _adb-tls-connect._tcp.local. services' run --mdns
+grep -qx closed "$FAKE_ZC_MARKER" && echo "ok: zero-service resources closed" || { echo "FAIL: zero-service cleanup"; fails=$((fails+1)); }
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf multiple
+check "multiple zeroconf endpoints are ambiguous" 11 "" 'several local wireless devices' run --mdns
+! grep -q '^connect ' "$FAKE_LOG" && echo "ok: ambiguous zeroconf endpoints were not connected" || { echo "FAIL: ambiguous connect"; fails=$((fails+1)); }
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf duplicate
+check "duplicate zeroconf endpoints deduplicated" 0 192.168.1.20:41234 'discovered local ADB mDNS endpoint' run --mdns
+[[ $(grep -c '^connect 192.168.1.20:41234$' "$FAKE_LOG") == 1 ]] && echo "ok: duplicate endpoint connected once" || { echo "FAIL: duplicate connection"; fails=$((fails+1)); }
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf bad-port
+check "zeroconf malformed port rejected" 14 "" 'discovered services had no valid local IPv4 endpoints' run --mdns
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf bad-address
+check "zeroconf malformed and non-local addresses rejected" 14 "" 'discovered services had no valid local IPv4 endpoints' run --mdns
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf timeout
+start_time=$(date +%s)
+check "zeroconf resolution deadline is bounded" 14 "" 'timed out resolving' run --mdns
+(( $(date +%s) - start_time < 5 )) && echo "ok: discovery respected its total deadline" || { echo "FAIL: discovery exceeded its total deadline"; fails=$((fails+1)); }
+grep -qx cancelled "$FAKE_ZC_MARKER" && grep -qx closed "$FAKE_ZC_MARKER" && echo "ok: timed-out resources closed" || { echo "FAIL: timeout cleanup"; fails=$((fails+1)); }
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf browser-fail
+check "zeroconf backend failure is reported" 14 "" 'backend failed.*mock browser failure' run --mdns
+grep -qx closed "$FAKE_ZC_MARKER" && echo "ok: backend failure resources closed" || { echo "FAIL: backend cleanup"; fails=$((fails+1)); }
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf resolve-fail
+check "zeroconf resolver backend failure distinguished from timeout" 14 "" 'service resolution backend failed' run --mdns
+grep -qx closed "$FAKE_ZC_MARKER" && echo "ok: resolver failure resources closed" || { echo "FAIL: resolver cleanup"; fails=$((fails+1)); }
+setdev
+FAKE_MDNS_UNSUPPORTED=1 ADB_DISCOVERY_PYTHON="$T/python-stdlib" check "missing zeroconf package is actionable" 14 "" 'zeroconf dependency is missing' run --mdns
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf valid
+FAKE_CONNECT_STATE=unauthorized check "discovered but unauthorized device rejected" 12 "" 'unauthorized' run --mdns
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf valid
+FAKE_CONNECT_STATE=offline check "discovered but offline device rejected" 12 "" 'offline' run --mdns
+setdev
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf valid
+FAKE_CONNECT_EXTRA="USB device" check "unrelated attached device makes selection ambiguous" 11 "" 'ambiguous' run --mdns
+grep -qx 'connect 192.168.1.20:41234' "$FAKE_LOG" && echo "ok: unrelated device was not connected" || { echo "FAIL: wrong mdns connect target"; fails=$((fails+1)); }
 setdev "A1 device"
 check "valid explicit target skips wireless activation" 0 A1 'target=A1' run -s A1 --wireless-on
 [[ ! -s $FAKE_WIRELESS_LOG ]] && echo "ok: valid explicit target preserved without recovery" || { echo "FAIL: recovery ran for valid explicit target"; fails=$((fails+1)); }
@@ -106,8 +245,12 @@ setdev
 FAKE_WIRELESS_DEVICE="192.0.2.2:5555 device" check "wireless recovery resolves changed port" 0 192.0.2.2:5555 'target=192.0.2.2:5555' run --refresh --wireless-on
 grep -qx 'on' "$FAKE_WIRELESS_LOG" && echo "ok: recovery invoked once" || { echo "FAIL: recovery invocation"; fails=$((fails+1)); }
 setdev
-FAKE_MDNS_UNSUPPORTED=1 FAKE_WIRELESS_DEVICE="192.0.2.4:5555 device" check "combined mdns then wireless recovery" 0 192.0.2.4:5555 'target=192.0.2.4:5555' run --mdns --wireless-on
+export FAKE_MDNS_UNSUPPORTED=1; mock_zeroconf zero
+FAKE_WIRELESS_DEVICE="192.0.2.4:5555 device" check "combined mdns then wireless recovery" 0 192.0.2.4:5555 'target=192.0.2.4:5555' run --mdns --wireless-on
 grep -qx 'on' "$FAKE_WIRELESS_LOG" && echo "ok: combined flags explicitly enabled recovery" || { echo "FAIL: combined recovery invocation"; fails=$((fails+1)); }
+setdev
+FAKE_MDNS_FAIL=1 check "backend failure does not trigger explicit wireless fallback" 14 "" 'backend failed' run --mdns --wireless-on
+[[ ! -s $FAKE_WIRELESS_LOG ]] && echo "ok: backend failure did not activate wireless debugging" || { echo "FAIL: backend failure activated wireless debugging"; fails=$((fails+1)); }
 setdev
 FAKE_WIRELESS_DEVICE="192.0.2.2:5555 device" check "explicit target is not replaced after recovery" 10 "" 'refusing to select another target' run -s OLD --wireless-on
 setdev "A1 device" "B2 device"
@@ -129,6 +272,7 @@ src_out=$(bash -c '
     TARGET=stale
     source "$1"
     [[ $PWD == "$before" && $- == "$opts" && $(trap -p EXIT) == "$tr" ]] || echo CHANGED
+    [[ ${ADBT_MDNS_TARGET+x} ]] && echo LEAKED
     adbt_export 2>/dev/null; echo "rc=$? T=${TARGET-unset}"
     adbt_export; echo "rc=$? T=${TARGET-unset}"
     adbt_export -s NOPE 2>/dev/null; echo "rc=$? T=${TARGET-unset}"
