@@ -22,18 +22,19 @@ import java.util.TimeZone;
  * Runs on a worker thread only.
  */
 final class FrameOverlay {
-    static final int JPEG_QUALITY = 90;
-
     static final class Result {
         final byte[] jpeg;
         final boolean rendered;
+        final boolean transformed;
         final int width;
         final int height;
         final int exifOrientation;
         final long processingNanos;
-        Result(byte[] jpeg, boolean rendered, int width, int height, int exifOrientation, long processingNanos) {
+        Result(byte[] jpeg, boolean rendered, boolean transformed, int width, int height, int exifOrientation,
+               long processingNanos) {
             this.jpeg = jpeg;
             this.rendered = rendered;
+            this.transformed = transformed;
             this.width = width;
             this.height = height;
             this.exifOrientation = exifOrientation;
@@ -50,11 +51,16 @@ final class FrameOverlay {
     static Result process(byte[] jpeg, CaptureConfig config, double actualFps, long wallMillis, TimeZone zone,
                           OverlayTelemetry telemetry) throws IOException {
         long start = System.nanoTime();
-        if (!config.overlayEnabled) return new Result(jpeg, false, 0, 0, 1, System.nanoTime() - start);
+        if (!config.overlayEnabled && !config.mirror)
+            return new Result(jpeg, false, false, 0, 0, 1, System.nanoTime() - start);
+        int sourceOrientation = readOrientation(jpeg);
+        ImageTransformPlan plan = ImageTransformPlan.forFrame(config, sourceOrientation);
+        if (plan.passthrough)
+            return new Result(jpeg, false, false, 0, 0, 1, System.nanoTime() - start);
         Bitmap decoded = null;
         Bitmap upright = null;
         try {
-            int tag = readOrientation(jpeg);
+            int tag = plan.normalizeExif ? sourceOrientation : ExifInterface.ORIENTATION_NORMAL;
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inPreferredConfig = Bitmap.Config.ARGB_8888;
             options.inMutable = true;
@@ -62,10 +68,21 @@ final class FrameOverlay {
             if (decoded == null) throw new IOException("JPEG decode failed.");
             upright = normalize(decoded, tag);
             if (upright != decoded) { decoded.recycle(); decoded = null; }
-            draw(upright, OverlayFormat.lines(config, actualFps, wallMillis, zone, telemetry), config);
+            if (plan.mirrorPixels) {
+                Bitmap source = upright;
+                Bitmap mirrored = mirror(source);
+                if (mirrored != source) {
+                    if (decoded == source) decoded = null;
+                    source.recycle();
+                }
+                upright = mirrored;
+            }
+            if (plan.drawOverlay)
+                draw(upright, OverlayFormat.lines(config, actualFps, wallMillis, zone, telemetry), config);
             ByteArrayOutputStream out = new ByteArrayOutputStream(jpeg.length + 4096);
-            if (!upright.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)) throw new IOException("JPEG encode failed.");
-            return new Result(out.toByteArray(), true, upright.getWidth(), upright.getHeight(), tag, System.nanoTime() - start);
+            if (!upright.compress(Bitmap.CompressFormat.JPEG, plan.jpegQuality, out)) throw new IOException("JPEG encode failed.");
+            return new Result(out.toByteArray(), config.overlayEnabled, true, upright.getWidth(), upright.getHeight(), 1,
+                System.nanoTime() - start);
         } catch (OutOfMemoryError e) {
             throw new IOException("Out of memory while rendering the overlay.");
         } finally {
@@ -99,6 +116,12 @@ final class FrameOverlay {
             result = copy;
         }
         return result;
+    }
+
+    private static Bitmap mirror(Bitmap source) {
+        Matrix matrix = new Matrix();
+        matrix.setScale(-1f, 1f);
+        return Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
     }
 
     private static void draw(Bitmap bitmap, List<String> lines, CaptureConfig config) {

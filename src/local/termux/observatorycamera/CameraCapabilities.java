@@ -40,13 +40,19 @@ public final class CameraCapabilities {
     }
 
     private final List<JpegSize> sizes;
+    public final CameraControlCapabilities controls;
 
     public CameraCapabilities(List<JpegSize> sizes) {
+        this(sizes, null);
+    }
+
+    public CameraCapabilities(List<JpegSize> sizes, CameraControlCapabilities controls) {
         if (sizes == null || sizes.isEmpty()) throw new IllegalArgumentException("No JPEG output sizes.");
         ArrayList<JpegSize> copy = new ArrayList<>(sizes);
         Collections.sort(copy, Comparator.comparingLong((JpegSize s) -> (long) s.width * s.height)
             .thenComparingInt(s -> s.width).thenComparingInt(s -> s.height));
         this.sizes = Collections.unmodifiableList(copy);
+        this.controls = controls;
     }
 
     public List<JpegSize> sizes() { return sizes; }
@@ -72,6 +78,10 @@ public final class CameraCapabilities {
         if (selected == null) return "unsupported-jpeg_size:" + config.jpegSize;
         if ((long) selected.width * selected.height > MAX_JPEG_PIXELS)
             return "unsupported-jpeg_size:application-limit-" + MAX_JPEG_PIXELS + "-pixels";
+        if (controls != null) {
+            String controlError = controls.validate(config, selected.minFrameDurationNanos);
+            if (controlError != null) return controlError;
+        }
         return null;
     }
 

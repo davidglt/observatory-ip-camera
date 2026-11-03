@@ -119,6 +119,18 @@ public final class SnapshotHttpServerTest {
                 && viewerText.contains("p.oninput=()=>{f.value=p.value}")
                 && viewerText.contains("f.oninput=()=>{if(/^#[0-9a-fA-F]{6}$/.test(f.value))p.value=f.value}"),
                 "independent editable RGB fields and visual pickers synchronize in both directions");
+            check(viewerText.contains("renderControls(k.controls)")
+                && viewerText.contains("Manual focus distance (diopters; 0 = infinity)")
+                && viewerText.contains("Exposure compensation (")
+                && viewerText.contains("Manual exposure time (ns)")
+                && viewerText.contains("White balance")
+                && viewerText.contains("JPEG quality")
+                && viewerText.contains("Horizontal mirror (fixed installation)")
+                && viewerText.contains("p.set('focus_distance_diopters','0')")
+                && viewerText.contains("p.set('exposure_compensation','0');p.set('ae_lock','off')")
+                && viewerText.contains("p.set('awb_lock','off')")
+                && viewerText.contains("Saved."),
+                "image controls use queried capabilities, explicit units, and a short save acknowledgement");
             check(indexOf(request(port, "GET", "/api/config"), "401 Unauthorized") > 0, "admin API requires bearer token");
             String auth = "Authorization: Bearer " + token + "\r\n";
             check(indexOf(request(port, "GET", "/api/config", auth, new byte[0]), "200 OK") > 0, "authenticated GET");

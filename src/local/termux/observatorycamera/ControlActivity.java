@@ -191,7 +191,7 @@ public final class ControlActivity extends Activity {
             Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=" + outcome.error));
             return;
         }
-        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", outcome.config.describe() + " applied=next-frame-or-session"));
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", "saved=true effect=next-frame-or-session"));
     }
 
     private String validateConfig(CaptureConfig config) {

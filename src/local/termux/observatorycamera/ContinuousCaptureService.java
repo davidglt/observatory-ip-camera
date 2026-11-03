@@ -69,12 +69,27 @@ public final class ContinuousCaptureService extends Service {
     private static volatile String effectiveTargetFps = "n/a";
     private static volatile String metadataEstimateFps = "unknown";
     private static volatile String reloadError;
+    private static volatile String effectiveControls;
+    private static volatile String effectiveControlRequest;
+    private static volatile String effectiveImageTransform;
 
     public static ContinuousStatus getStatus() { return status; }
     public static String effectiveJpegSize() { return effectiveJpegSize; }
     public static String effectiveTargetFps() { return effectiveTargetFps; }
     public static String metadataEstimateFps() { return metadataEstimateFps; }
     public static String reloadError() { return reloadError; }
+    public static String effectiveControls() { return effectiveControls; }
+    public static String effectiveControlRequest() { return effectiveControlRequest; }
+    public static String effectiveImageTransform() { return effectiveImageTransform; }
+    static void recordEffectiveControls(android.hardware.camera2.CaptureResult result, CaptureConfig config) {
+        effectiveControls = Camera2RequestMapper.effectiveControlsJson(result);
+        effectiveControlRequest = Camera2RequestMapper.requestedControlsJson(config);
+    }
+    static void recordEffectiveImageTransform(CaptureConfig config, FrameOverlay.Result result) {
+        String mode = result.rendered ? "rendered" : result.transformed ? "transformed" : "passthrough";
+        effectiveImageTransform = "{\"overlay_mode\":\"" + mode + "\",\"mirror\":"
+            + (config.mirror ? "true" : "false") + "}";
+    }
     public static boolean isActive() { return status.isActive(); }
     public static void setListener(Listener value) { listener = value; }
 
@@ -113,6 +128,8 @@ public final class ContinuousCaptureService extends Service {
     private volatile boolean inFlight;
     private volatile long serial;
     private long captureStartNanos;
+    private volatile CaptureConfig frameConfig;
+    private String lastRequestedFocusMode;
     private final Runnable watchdog = () -> runtimeFail("Timed out waiting for a frame after " + FRAME_TIMEOUT_MS + " ms.");
 
     @Override public IBinder onBind(Intent intent) { return null; }
@@ -161,6 +178,10 @@ public final class ContinuousCaptureService extends Service {
         lastBytes = 0;
         overlayMode = "-";
         reloadError = null;
+        effectiveControls = null;
+        effectiveControlRequest = null;
+        effectiveImageTransform = null;
+        lastRequestedFocusMode = null;
         effectiveJpegSize = "unknown";
         effectiveTargetFps = "unknown";
         metadataEstimateFps = "unknown";
@@ -190,7 +211,7 @@ public final class ContinuousCaptureService extends Service {
                 map.getOutputMinFrameDuration(ImageFormat.JPEG, candidate),
                 map.getOutputStallDuration(ImageFormat.JPEG, candidate)));
         }
-        capabilities = new CameraCapabilities(jpegSizes);
+        capabilities = new CameraCapabilities(jpegSizes, CameraCapabilityReader.controls(info));
         String invalid = capabilities.validate(config);
         if (invalid != null) throw new IllegalArgumentException(invalid);
         effectiveSize = capabilities.select(config);
@@ -253,6 +274,7 @@ public final class ContinuousCaptureService extends Service {
                     try {
                         builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
                         builder.addTarget(reader.getSurface());
+                        lastRequestedFocusMode = null;
                     } catch (Exception e) { MAIN.post(() -> fatal(gen, "Could not create request: " + e)); return; }
                 }
                 MAIN.post(() -> {
@@ -277,14 +299,38 @@ public final class ContinuousCaptureService extends Service {
         if (gen != generation || inFlight) return;
         final long id = ++serial;
         try {
+            CaptureConfig requested = CaptureSettings.load(this);
+            String invalid = capabilities == null ? "camera-capability-unavailable" : capabilities.validate(requested);
+            if (invalid != null) {
+                reloadError = invalid;
+                requested = activeConfig;
+            } else {
+                reloadError = null;
+                CameraCapabilities.JpegSize desired = capabilities.select(requested);
+                if (desired != null && effectiveSize != null && !desired.value().equals(effectiveSize.value())) {
+                    reconfigure(gen, desired, requested);
+                    return;
+                }
+            }
             synchronized (lock) {
                 if (gen != generation || session == null) return;
+                activeConfig = requested;
+                frameConfig = requested;
                 int angle = lastAngle;
                 int deviceOrientation = angle < 0 ? 0 : JpegOrientation.roundDeviceOrientation(angle);
-                builder.set(CaptureRequest.JPEG_ORIENTATION, JpegOrientation.calculate(sensorOrientation, deviceOrientation, frontFacing));
+                int jpegOrientation = JpegOrientation.calculate(requested, sensorOrientation, deviceOrientation, frontFacing);
+                builder.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation);
+                Camera2RequestMapper.apply(builder, requested, capabilities.controls,
+                    effectiveSize == null ? 0 : effectiveSize.minFrameDurationNanos,
+                    !requested.focusMode.equals(lastRequestedFocusMode));
+                lastRequestedFocusMode = requested.focusMode;
+                final CaptureConfig capturedConfig = requested;
                 inFlight = true;
                 captureStartNanos = SystemClock.elapsedRealtimeNanos();
                 session.capture(builder.build(), new CameraCaptureSession.CaptureCallback() {
+                    @Override public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest r, android.hardware.camera2.TotalCaptureResult result) {
+                        recordEffectiveControls(result, capturedConfig);
+                    }
                     @Override public void onCaptureFailed(CameraCaptureSession s, CaptureRequest r, CaptureFailure failure) {
                         cameraHandler.post(() -> frameFailed(gen, id, "Capture failed: reason " + failure.getReason()));
                     }
@@ -404,17 +450,17 @@ public final class ContinuousCaptureService extends Service {
             return;
         }
         try {
-            CaptureConfig config = CaptureSettings.load(this);
-            if (capabilities != null && capabilities.validate(config) != null) config = activeConfig;
+            CaptureConfig config = frameConfig == null ? activeConfig : frameConfig;
             TelemetrySnapshot telemetry = TelemetrySnapshot.read(this);
             FrameOverlay.Result r = FrameOverlay.process(data, config, stats.fpsWith(acquired), wall,
                 TimeZone.getTimeZone(zone), telemetry.overlayTelemetry);
             if (r.jpeg.length > CameraCapabilities.MAX_JPEG_BYTES) throw new IOException("JPEG output exceeds the application byte limit.");
             boolean published = SnapshotPublisher.publish(getFilesDir(), "snapshot.jpg", r.jpeg, () -> gen == generation);
             if (!published) return;
+            recordEffectiveImageTransform(config, r);
             stats.recordFrame(acquired, r.processingNanos);
             lastBytes = r.jpeg.length;
-            overlayMode = r.rendered ? "rendered" : "passthrough";
+            overlayMode = r.rendered ? "rendered" : r.transformed ? "transformed" : "passthrough";
             publishFrame(wall, zone);
             Log.i(TAG, "Frame " + stats.frames() + " published, " + r.jpeg.length + " bytes, overlay=" + overlayMode + ", processing " + r.processingNanos / 1_000_000L + " ms.");
             handler.post(() -> cycleDone(gen, id, true));

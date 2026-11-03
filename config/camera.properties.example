@@ -40,6 +40,32 @@ jpeg_size=auto
 # The stored 64-bit tenths representation supports up to 922337203685477580.7.
 target_fps=1.0
 
+# Camera2 focus control. Modes and ranges are selected-camera specific.
+# auto | lock | manual | advertised AF mode; lock/manual are available only when supported.
+# Manual focus distance is in Camera2 diopters (0 = infinity).
+focus_mode=auto
+focus_distance_diopters=0
+
+# auto | manual. Manual sensor mode requires the advertised ISO and exposure ranges.
+# Exposure time is in nanoseconds. Manual mode requires AE lock off and compensation zero.
+exposure_mode=auto
+exposure_compensation=0
+ae_lock=off
+iso=100
+exposure_time_ns=10000000
+
+# auto or a white-balance preset advertised by the selected camera. No manual color temperature.
+white_balance=auto
+awb_lock=off
+
+# JPEG quality requested from Camera2 and used for overlay/mirror re-encoding. Range: 1-100.
+jpeg_quality=90
+
+# Automatic physical orientation or an explicit fixed-installation rotation.
+orientation_mode=auto
+rotation_degrees=0
+mirror=off
+
 # Overlay text color: #RRGGBB (case-insensitive, stored uppercase) or legacy green.
 # The legacy green value preserves the existing appearance. A black outline and
 # shadow are retained. Default: green
