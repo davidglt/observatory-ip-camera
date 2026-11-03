@@ -166,13 +166,27 @@ public final class SnapshotStreamTest {
             check(page.contains("Settings") && page.contains("Authorization") && page.contains("<script nonce=")
                 && !page.contains("localStorage") && !page.contains("sessionStorage"), "viewer has in-memory authenticated settings only");
             check(page.contains("grid-template-columns:repeat(2,minmax(0,1fr))")
-                && page.contains("@media(max-width:600px)") && page.contains("grid-template-columns:minmax(0,1fr)"),
-                "settings grid adapts to narrow screens");
+                && page.contains("#viewer[data-telemetry-position=left]{grid-template-columns:260px minmax(0,1fr)")
+                && page.contains("@media(max-width:800px){#viewer,#viewer[data-telemetry-position]{grid-template-columns:minmax(0,1fr);grid-template-areas:'image' 'telemetry'}}")
+                && page.contains("@media(max-width:600px)") && page.contains("grid-template-columns:minmax(0,1fr)")
+                && page.contains("id=\"telemetry\"") && page.contains("setInterval(updateTelemetry,2000)"),
+                "telemetry panel and settings adapt without refreshing the image");
             check(page.contains("name=\"visible_field\" value=\"location\"")
                 && page.contains("name=\"visible_field\" value=\"datetime\"")
                 && page.contains("name=\"visible_field\" value=\"fps\"")
+                && page.contains("name=\"visible_field\" value=\"temperature\"")
+                && page.contains("name=\"visible_field\" value=\"humidity\"")
+                && page.contains("name=\"visible_field\" value=\"pressure\"")
+                && page.contains("name=\"visible_field\" value=\"battery\"")
+                && page.contains("name=\"visible_field\" value=\"battery_temperature\"")
+                && page.contains("name=\"visible_field\" value=\"charging\"")
+                && page.contains("name=\"visible_field\" value=\"thermal\"")
                 && !page.contains("type=\"checkbox\" name=\"visible_field\" value=\"frames\""),
-                "visible fields have three labeled checkboxes only");
+                "visible overlay fields are individually selectable without a frame counter");
+            check(page.contains("name=\"panel_environment\"") && page.contains("name=\"panel_device\"")
+                && page.contains("name=\"panel_capture\"") && page.contains("name=\"mqtt_host\"")
+                && page.contains("name=\"mqtt_tls\"") && !page.contains("name=\"mqtt_password\""),
+                "panel groups and non-secret MQTT settings are configurable");
             check(page.contains("result.textContent='Saved.'") && !page.contains("Saved atomically.")
                 && page.contains("p.set('fields',visible.length?visible.join(','):'none')"),
                 "save acknowledges briefly and explicitly supports no fields");

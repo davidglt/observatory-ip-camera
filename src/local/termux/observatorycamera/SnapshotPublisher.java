@@ -39,6 +39,7 @@ final class SnapshotPublisher {
                 pending.delete();
                 throw new IOException("Could not publish snapshot.");
             }
+            destination.setLastModified(System.currentTimeMillis());
             return true;
         }
     }

@@ -21,6 +21,7 @@ public final class ConfigStoreTest {
         File other = null;
         File fresh = null;
         File capabilityDir = null;
+        File telemetryDir = null;
         try {
         ConfigStore store = new ConfigStore(dir);
         File live = new File(dir, "camera.properties");
@@ -38,7 +39,7 @@ public final class ConfigStoreTest {
         // Update, persistence across a new store instance (service restart / app update keeps filesDir).
         check(store.update("overlay=off target_fps=15.5 position=top-right").config != null, "fractional update ok");
         ConfigStore again = new ConfigStore(dir);
-        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps target_fps=15.5 jpeg_size=auto text_color=green"), again.load().config.describe());
+        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps target_fps=15.5 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120"), again.load().config.describe());
         check(store.update("target_fps=10").config != null
             && new ConfigStore(dir).load().config.targetFpsString().equals("10.0"), "above-9 target persists across store instances");
         String saved = read(live);
@@ -81,11 +82,34 @@ public final class ConfigStoreTest {
         check(ok.config.targetFpsTenths == 10 && ok.config.position.equals("bottom-left") && ok.config.overlayEnabled, "defaults for missing keys");
         check(ok.config.jpegSize.equals("auto"), "missing JPEG size preserves the legacy default selection");
 
+        telemetryDir = Files.createTempDirectory("cfg-telemetry").toFile();
+        ConfigStore telemetryStore = new ConfigStore(telemetryDir);
+        ConfigStore.Outcome telemetrySaved = telemetryStore.update(
+            "fields=temperature,humidity,pressure,battery,battery_temperature,charging,thermal text_color=#aBcDeF telemetry_position=left panel_enabled=off panel_text_color=#123456 panel_background_color=#abcdef panel_text_size=32 panel_environment=off panel_device=on panel_capture=off mqtt_host=broker.example mqtt_port=65535 mqtt_topic=homeassistant/nyx/reading mqtt_tls=on mqtt_stale_seconds=600");
+        CaptureConfig telemetryReloaded = new ConfigStore(telemetryDir).load().config;
+        check(telemetrySaved.config != null && telemetryReloaded.fieldsString().equals(
+            "temperature,humidity,pressure,battery,battery_temperature,charging,thermal")
+            && !telemetryReloaded.panelEnabled && !telemetryReloaded.panelEnvironment
+            && telemetryReloaded.panelDevice && !telemetryReloaded.panelCapture
+            && telemetryReloaded.textColor.equals("#ABCDEF") && telemetryReloaded.telemetryPosition.equals("left")
+            && telemetryReloaded.panelTextColor.equals("#123456") && telemetryReloaded.panelBackgroundColor.equals("#ABCDEF")
+            && telemetryReloaded.mqttHost.equals("broker.example") && telemetryReloaded.mqttPort == 65535
+            && telemetryReloaded.mqttTls && telemetryReloaded.mqttStaleSeconds == 600,
+            "telemetry panel, colors, position and MQTT properties persist and reload");
+        check(read(new File(telemetryDir, ConfigStore.FILE_NAME)).contains("text_color=#ABCDEF")
+            && read(new File(telemetryDir, ConfigStore.FILE_NAME)).contains("telemetry_position=left"),
+            "RGB color canonical form and panel position persist in camera.properties");
+        check(!telemetryReloaded.toMap().containsKey("mqtt_username")
+            && !telemetryReloaded.toMap().containsKey("mqtt_password"),
+            "credential values are not part of camera.properties settings responses or exports");
+
         // Invalid imports: whole file rejected, live file untouched, import file removed.
         String before = read(live);
         String[] badImports = {"location=ok\nbogus=1\n", "text_size=500\n", "target_fps=0\n", "target_fps=1.25\n",
             "target_fps=922337203685477581\n", "jpeg_size=1280x0\n", "overlay=maybe\n", "fields=gps\n", "position=middle\n",
-            "text_color=red\n", "location=a\\u00zz\n", "location=" + new String(new char[30]).replace('\0', 'x') + "\n"};
+            "text_color=red\n", "text_color=#12345\n", "telemetry_position=middle\n",
+            "mqtt_password=not-exportable\n", "mqtt_username=not-exportable\n",
+            "location=a\\u00zz\n", "location=" + new String(new char[30]).replace('\0', 'x') + "\n"};
         for (String b : badImports) {
             write(imp, b);
             ConfigStore.Outcome o = store.importPending();
@@ -142,6 +166,7 @@ public final class ConfigStoreTest {
             deleteTree(other);
             deleteTree(fresh);
             deleteTree(capabilityDir);
+            deleteTree(telemetryDir);
         }
     }
 }

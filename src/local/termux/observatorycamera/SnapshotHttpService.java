@@ -77,7 +77,8 @@ public final class SnapshotHttpService extends Service {
         }
         if (server == null) {
             server = new SnapshotHttpServer(new File(getFilesDir(), "snapshot.jpg"), SnapshotHttpServer.DEFAULT_PORT,
-                message -> Log.i(TAG, message), new AdminTokenStore(getFilesDir()), new SnapshotAdminApi(this));
+                message -> Log.i(TAG, message), new AdminTokenStore(getFilesDir()), new SnapshotAdminApi(this),
+                () -> new SnapshotHttpServer.ApiResult(200, "OK", TelemetrySnapshot.read(this).toJson()));
             server.setOnTerminated(() -> main.post(() -> {
                 if (server != null) fail("HTTP server thread ended unexpectedly.");
             }));
@@ -89,6 +90,7 @@ public final class SnapshotHttpService extends Service {
             fail("Could not listen on port " + SnapshotHttpServer.DEFAULT_PORT + ": " + e.getMessage());
             return;
         }
+        TelemetryRuntime.start(this);
         manager.notify(NOTIFICATION_ID, buildNotification("Listening on port " + server.getLocalPort()
             + ". Plaintext HTTP; viewer is public: trusted LAN only."));
         setState(true, null);
@@ -111,6 +113,7 @@ public final class SnapshotHttpService extends Service {
     }
 
     private void shutdown() {
+        TelemetryRuntime.stop();
         SnapshotHttpServer current = server;
         server = null;
         if (current != null) current.stop();
@@ -118,6 +121,7 @@ public final class SnapshotHttpService extends Service {
     }
 
     @Override public void onDestroy() {
+        TelemetryRuntime.stop();
         SnapshotHttpServer current = server;
         server = null;
         if (current != null) current.stop();

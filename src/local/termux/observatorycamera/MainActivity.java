@@ -91,7 +91,15 @@ public final class MainActivity extends Activity {
         layout.addView(warning);
         setContentView(layout);
         updateServerStatus();
-        report("Observatory IP Camera 0.2.0\nReady. No network streaming.");
+        report("Observatory IP Camera " + appVersion() + "\nReady. No network streaming.");
+    }
+
+    private String appVersion() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (PackageManager.NameNotFoundException e) {
+            return "unknown";
+        }
     }
 
     @Override protected void onResume() {

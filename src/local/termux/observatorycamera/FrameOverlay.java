@@ -44,6 +44,11 @@ final class FrameOverlay {
     private FrameOverlay() {}
 
     static Result process(byte[] jpeg, CaptureConfig config, double actualFps, long wallMillis, TimeZone zone) throws IOException {
+        return process(jpeg, config, actualFps, wallMillis, zone, null);
+    }
+
+    static Result process(byte[] jpeg, CaptureConfig config, double actualFps, long wallMillis, TimeZone zone,
+                          OverlayTelemetry telemetry) throws IOException {
         long start = System.nanoTime();
         if (!config.overlayEnabled) return new Result(jpeg, false, 0, 0, 1, System.nanoTime() - start);
         Bitmap decoded = null;
@@ -57,7 +62,7 @@ final class FrameOverlay {
             if (decoded == null) throw new IOException("JPEG decode failed.");
             upright = normalize(decoded, tag);
             if (upright != decoded) { decoded.recycle(); decoded = null; }
-            draw(upright, OverlayFormat.lines(config, actualFps, wallMillis, zone), config);
+            draw(upright, OverlayFormat.lines(config, actualFps, wallMillis, zone, telemetry), config);
             ByteArrayOutputStream out = new ByteArrayOutputStream(jpeg.length + 4096);
             if (!upright.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)) throw new IOException("JPEG encode failed.");
             return new Result(out.toByteArray(), true, upright.getWidth(), upright.getHeight(), tag, System.nanoTime() - start);
@@ -128,7 +133,7 @@ final class FrameOverlay {
             canvas.drawText(lines.get(i), x, y, paint);
             paint.clearShadowLayer();
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.GREEN);
+            paint.setColor(Color.parseColor(OverlayFormat.textColor(config)));
             canvas.drawText(lines.get(i), x, y, paint);
         }
     }

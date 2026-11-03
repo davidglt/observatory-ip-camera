@@ -149,6 +149,11 @@ FAKE_LOGLINE="cmd=config-set result=config overlay=off applied=next-frame" expec
 grep -q -- "--es config 'overlay=off'" "$FAKE_LOG" && echo "ok config passed single-quoted" || { echo "FAIL config quoting"; fails=$((fails+1)); }
 FAKE_LOGLINE="cmd=config-set result=config fields=none applied=next-frame" expect config-set-no-fields 0 "fields=none" -s T --no-wake --timeout 5 config-set fields=
 grep -q -- "--es config 'fields='" "$FAKE_LOG" && echo "ok empty field selection passed" || { echo "FAIL empty field selection quoting"; fails=$((fails+1)); }
+export FAKE_LOGLINE="cmd=config-set result=config panel_text_color=#123456 mqtt_host= applied=next-frame"
+expect telemetry-config-set 0 "panel_text_color=#123456" -s T --no-wake --timeout 5 config-set \
+    panel_text_color=#123456 mqtt_host= mqtt_topic=homeassistant/nyx/reading
+grep -q -- "--es config 'panel_text_color=#123456 mqtt_host= mqtt_topic=homeassistant/nyx/reading'" "$FAKE_LOG" \
+    && echo "ok telemetry settings passed to app" || { echo "FAIL telemetry settings quoting"; fails=$((fails+1)); }
 FAKE_LOGLINE="cmd=config-set result=failed reason=invalid-config:invalid-text_size:expected-10-96" expect config-set-rejected 2 "nothing changed" -s T --no-wake --timeout 5 config-set text_size=5
 FAKE_LOGLINE="cmd=config-reset result=config overlay=on applied=next-frame" expect config-reset 0 "overlay=on" -s T --no-wake --timeout 5 config-reset
 printf 'overlay=on\nlocation=NYX\n' > "$T/export"
@@ -174,7 +179,9 @@ expect config-injection-sub 2 "Invalid assignment" -s T config-set 'location=$(i
 expect config-space 2 "Invalid assignment|Unknown" -s T config-set "location=a b"
 expect config-empty 2 "needs at least one" -s T config-set
 expect assignment-elsewhere 2 "only valid after config-set" -s T status overlay=on
-expect config-too-long 2 "too long" -s T config-set "location=$(printf 'a%.0s' $(seq 1 120))" "fields=$(printf 'b%.0s' $(seq 1 120))"
+expect config-too-long 2 "too long" -s T config-set "location=$(printf 'a%.0s' $(seq 1 250))" \
+    "location=$(printf 'b%.0s' $(seq 1 250))" "location=$(printf 'c%.0s' $(seq 1 250))" \
+    "location=$(printf 'd%.0s' $(seq 1 250))" "location=$(printf 'e%.0s' $(seq 1 250))"
 [[ $(wc -l < "$FAKE_LOG") -eq $n ]] && echo "ok rejected input made no adb call" || { echo "FAIL adb called for rejected input"; fails=$((fails+1)); }
 grep -q -- ' -S' "$FAKE_LOG" && { echo "FAIL am start -S used"; fails=$((fails+1)); } || echo "ok no am start -S"
 grep -q force-stop "$FAKE_LOG" && { echo "FAIL force-stop used"; fails=$((fails+1)); } || echo "ok no force-stop"

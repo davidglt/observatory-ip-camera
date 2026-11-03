@@ -2,7 +2,11 @@
 
 Native Java Android camera app developed, compiled and signed in Termux. Source, comments, messages and documentation are in English.
 
-## Status: 0.5.0 (continuous capture, not yet compiled to an APK or device-validated)
+## Status: 0.6.0 (telemetry; device and browser behavior not yet verified)
+
+New in 0.6.0: device and optional BME280 environmental telemetry in a responsive viewer panel and independently configurable JPEG overlays. See "Telemetry" below.
+
+Release versioning: increment `versionCode` for every new release and update `versionName` according to the scope of the change. Do not increment either value for every local rebuild.
 
 New in 0.5.0: sustained Camera2 JPEG capture with a burned-in overlay, controlled only over authorized ADB (see "Continuous capture and overlay" below). Everything below about 0.4.0 still applies.
 
@@ -78,7 +82,7 @@ Set TARGET to a verified device and run each step; record fresh output.
 10. Caller restriction: from another installed app (or `adb shell run-as <other uid>`), start ControlActivity and confirm a permission denial; document the result.
 11. Doze/lock screen: record behavior; no guarantee.
 
-Validation status: `bash test/run.sh` runs the Java and fake-ADB suites. The Android changes in this work were not compiled against `android.jar`, installed, or run on a device; browser, camera, sustained-FPS and real security validation were not performed here. Run `bash build.sh` in the configured Termux environment and complete the device/browser checklist below.
+Validation status: the automated Java and fake-ADB suites passed, and `bash build.sh` compiled and signed the APK against Android API 34 with the pinned MQTT dependencies. The APK was not installed. Phone-specific battery/thermal behavior, camera capture, actual MQTT broker interoperability and browser rendering have not been verified on a device.
 
 ## Continuous capture and overlay
 
@@ -87,7 +91,7 @@ Sustained JPEG capture runs in ContinuousCaptureService, started and stopped onl
 ```sh
 bash scripts/camera-control.sh -s "$TARGET" setup-permissions       # CAMERA + POST_NOTIFICATIONS, only when you choose
 bash scripts/camera-control.sh -s "$TARGET" config-show
-bash scripts/camera-control.sh -s "$TARGET" config-set overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps jpeg_size=auto target_fps=1
+bash scripts/camera-control.sh -s "$TARGET" config-set overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps jpeg_size=auto target_fps=1 'text_color=#00FF00' telemetry_position=right
 bash scripts/camera-control.sh -s "$TARGET" admin-token-show
 bash scripts/camera-control.sh -s "$TARGET" admin-token-show       # explicitly provision/retrieve token for the browser
 bash scripts/camera-control.sh -s "$TARGET" admin-token-rotate    # invalidate old token and print a new one
@@ -105,7 +109,7 @@ Pipeline: one camera device, one capture session and one ImageReader (maxImages 
 
 Rate: the default requested target is 1 FPS. `target_fps` accepts positive rates with at most one decimal digit, from 0.1 through 922337203685477580.7; the upper bound is the largest value representable as signed 64-bit tenths. Camera2 minimum-frame and JPEG-stall timing metadata is reported as an informational estimate only and never rejects a requested target. A zero/unknown minimum frame duration remains `unknown`; a reported zero JPEG stall duration means no additional stall in that metadata. The estimate excludes processing/publication costs and is not guaranteed sustainable throughput. Captures are serialized: the next capture starts only after the previous frame is processed and published (or fails), so slow hardware or processing produces fewer actual FPS without overlapping captures or catch-up queues/bursts. `continuous-status` and the web Settings panel distinguish the requested target, effective target, metadata estimate and actual FPS. Check actual FPS and `late` cycles on the device. Nanosecond timing arithmetic bottoms out at a 1 ns interval, and Android handler delays have millisecond resolution; these are representation/scheduler bounds, not operational FPS caps. `continuous-status` also reports processing time (last/avg/max ms, bytes, overlay mode), state, frames (successfully published), last_capture/tz and monotonic age. The frame time is when the JPEG is received, so it can trail exposure by camera latency; it is never HTTP retrieval time.
 
-Overlay (default on, burned into the JPEG pixels so snapshot clients and any later MJPEG consumer see it): bottom-left, green bold text with black outline and shadow, margins of 3% of the short side (min 8 px). Default text:
+Overlay (default on, burned into the JPEG pixels so snapshot clients and any later MJPEG consumer see it): bottom-left, bold text with configurable `#RRGGBB` color (or legacy `green`) and a black outline and shadow, margins of 3% of the short side (min 8 px). Missing or legacy `text_color=green` keeps the original green appearance. RGB values accept either case and are persisted in uppercase.
 
 ```
 NYX
@@ -114,9 +118,27 @@ FPS: 0.9 / 1.0
 ```
 NYX is a configurable text label, not GPS; no location permission is used. FPS shows measured actual capture/publication rate followed by the configured target; actual FPS shows `--` until it can be measured. Single capture uses the same overlay with `FPS: -- / 1.0`. The visible-field selection controls Location, Date/time, and FPS; frame counts remain internal diagnostics and are not drawn.
 
+The web viewer has an independent framed telemetry panel outside the image: `telemetry_position=left|right` selects its side on wide screens (default right), and on narrow screens it is always below the image. Settings provide editable RGB hex text and synchronized color pickers for the overlay text, panel text, and panel background independently. The panel defaults to a black background/red text and has independently selectable Environment, Device and Capture groups. Its status polling is read-only and does not request captures or reload the image. `/api/telemetry` is public and bounded like the existing public viewer/snapshot routes; it returns display telemetry and panel appearance only, never broker settings or credentials. The existing config/capability APIs remain bearer-token authenticated.
+
+The camera.properties keys `text_color`, `panel_text_color`, `panel_background_color`, and `telemetry_position` use the same validated atomic save/import path as the other settings. For shell commands, quote RGB assignments to keep `#` in the value, for example: `config-set 'text_color=#12ABCD' 'panel_text_color=#FF0000' 'panel_background_color=#000000' telemetry_position=left`. Web Settings, SSH, import/export and reload all share this persisted configuration.
+
+Each overlay field has its own checkbox. New overlay telemetry fields (environmental Temperature, Humidity and Pressure, Battery level/temperature, Charging status and Thermal status) default off, leaving the previously visible Location/Date-time/FPS unchanged for existing files. Panel group selections do not change overlay selections. Environmental values are burned into JPEG pixels only when the source timestamp is fresh; unavailable or stale values are labeled `--`. Thermal status is an Android severity (`none` through `shutdown`), not a CPU temperature. Processing times and server diagnostics are panel-only. All overlay fields may be unchecked and persist as `fields=none`.
+
+The optional MQTT subscriber is disabled while `mqtt_host` is empty. Configure broker host, port, topic, TLS and stale threshold in `camera.properties` or Settings; the topic defaults to `homeassistant/nyx/reading`, and the default stale threshold is 120 seconds. Messages are bounded JSON from the existing BME280 producer and must contain finite numeric `timestamp_epoch`, `temperature_c`, `humidity_pct` and `pressure_hpa` within -40..85 C, 0..100 percent and 300..1100 hPa. Altitude is ignored. Age is based on the source timestamp, including retained messages; future timestamps more than 60 seconds ahead are rejected. MQTT reports disabled/connecting/disconnected/waiting/fresh/stale/error states. One client with a stable installation-specific ID distinct from `bme280-nyx` is started only with the explicitly started HTTP service and is stopped with it; it does not start the camera or an Android background service. TLS uses the system trust store and hostname validation.
+
 Settings are stored in the human-readable UTF-8 file `files/camera.properties` (java.util.Properties format, read and written with explicit UTF-8 Reader/Writer) in app-private storage. It is the single authoritative store: `config-show`, `config-set` and `config-reset` read and update this same file. A commented example with the full schema and defaults is committed as `config/camera.properties.example`; the live device file is never committed (`camera.properties` is git-ignored).
 
-Schema (every key optional; missing keys use the default; unknown keys or invalid values are rejected): `overlay=on|off` (default on), `location=` 1-24 characters, letters/digits (any script), inner spaces, `_ . -` (default NYX; a text label, not GPS), `position=bottom-left|bottom-right|top-left|top-right` (default bottom-left), `text_size=10-96` (for a 720 px short side, scaled to the image; long lines shrink to fit; default 24), `fields=` comma list of location,datetime,fps (default all); use `none` or an empty field list for no visible text. Existing `frames` entries remain accepted for compatibility but are ignored and omitted when configuration is next saved. `jpeg_size=auto|WIDTHxHEIGHT` (default auto; exact selected-camera JPEG sizes only, with an 8-megapixel app limit), `target_fps` (default 1.0; positive, with at most one decimal digit, representable through 922337203685477580.7; metadata estimates are informational), `text_color=green` (only green with a black outline and shadow is supported). The file must be valid UTF-8 and at most 8192 bytes. `config-set` takes shell-safe KEY=VALUE assignments (location without spaces or non-ASCII there; use import for those). Shell, import and web writes validate the entire candidate and leave the old file unchanged on error.
+Schema (every key optional; missing keys use the default; unknown keys or invalid values are rejected): existing capture and overlay keys remain as documented above. `panel_enabled`, `panel_environment`, `panel_device` and `panel_capture` are independent `on|off` choices; panel colors are six-digit hex and panel text size is 10-48 px. `mqtt_host` defaults empty (disabled), `mqtt_port` defaults to 1883, `mqtt_topic` defaults to `homeassistant/nyx/reading`, `mqtt_tls` defaults off and `mqtt_stale_seconds` is 10-3600 (default 120). A blank host disables MQTT. The file remains at most 8192 bytes. Shell, import and web writes validate the full candidate atomically.
+
+If authentication is required, credentials are read only from the separate app-private `files/mqtt-credentials.properties` file (with `username` and `password` keys; max 2 KiB). Do not put credentials in `camera.properties`. This file is deliberately excluded from `config-export`; `config-import` neither reads nor overwrites it. Back it up separately only in an encrypted, access-controlled location, and never paste credentials into browser settings, URLs, terminal history, logs or support reports. No API, HTML or settings response includes broker credentials.
+
+To provision credentials, create the properties file in a protected host location and stream it to the app-private file over the explicitly authorized ADB connection (the contents are sent on stdin, not included in the command line):
+
+```sh
+chmod 600 /secure/path/mqtt-credentials.properties
+adb -s "$TARGET" shell run-as local.termux.observatorycamera sh -c 'cat > files/mqtt-credentials.properties' \
+  < /secure/path/mqtt-credentials.properties
+```
 
 Export/import over authorized ADB, no touch UI:
 ```sh
@@ -124,7 +146,7 @@ bash scripts/camera-control.sh -s "$TARGET" config-export --out camera.propertie
 # edit camera.properties on the host (UTF-8), then:
 bash scripts/camera-control.sh -s "$TARGET" config-import --in camera.properties
 ```
-Import stages the file in the app-private `files/camera.import`, and the app validates the entire file before replacing anything. On any problem (unknown key, bad value, invalid UTF-8, over 8192 bytes) the previous valid configuration is kept, the staging file is deleted, and the script exits 2 with the reason.
+Import stages the file in the app-private `files/camera.import`, and the app validates the entire file before replacing anything. On any problem (unknown key, bad value, invalid UTF-8, over 8192 bytes) the previous valid configuration is kept, the staging file is deleted, and the script exits 2 with the reason. MQTT credentials are separate and unchanged by import/export.
 
 Apply/reload semantics: the file is re-read on each capture cycle and overlay. Overlay/FPS changes apply from the next cycle. A JPEG size change is applied between completed sequential frames by closing the current session/reader and configuring a new session/reader on the same camera device and existing camera owner; it never opens a second camera or restarts the service. Buffers remain bounded (`ImageReader` maxImages 2); if new-session configuration fails, the service safely closes resources and reports `state=error`, desired/effective size and the failure. It does not silently claim the requested size is active. Hand edits are not a supported write path: syntactically corrupt files use the last valid settings and are reported by `config-show`; a syntactically valid but unsupported size/FPS is rejected at runtime while the last active configuration continues, with a reload error. A missing file means defaults (`file=missing`; reading does not create it).
 
@@ -154,17 +176,17 @@ Set TARGET; run every step with the phone screen possibly off/unconnected to any
 13. Errors: `config-set text_size=5`, `target_fps=0`, `target_fps=1.25`, `fields=gps`, `position=middle`, `location='a b'`, `overlay=on;id` must be rejected (exit 2); verify `target_fps=15.5` and rates above 9 are accepted regardless of lower metadata estimates. Confirm failed updates leave `config-show` unchanged. Open another camera app during a run: record state/error and that `continuous-stop` still cleans up.
 14. Sustained run: 1-2 hours; sample `continuous-status` and `dumpsys meminfo local.termux.observatorycamera`, `dumpsys battery` temperature and `dumpsys thermalservice` every 10 minutes: frames increase, no growing memory, processing time stable, storage not growing (one snapshot file). Record thermal throttling.
 
-Validation status of this section: `bash test/run.sh` passed in this task, including pure Java config/capability/token/HTTP tests and shell tests against fake adb. The Android changes were not compiled against `android.jar` or run on a device; `bash build.sh`, APK signing, Camera2 behavior, foreground-camera rules, JPEG session reconfiguration, browser behavior, sustained FPS, and every checklist step remain unvalidated. This environment had no API 33 platform JAR, aapt2/d8/zipalign/apksigner or existing signing identity, so the build was not attempted rather than creating a new signing identity. No real-device or security validation is claimed.
+Validation status of this section: `bash test/run.sh` passed, including telemetry parsing, conversion, settings persistence, overlay selection, HTTP authorization and shell tests against fake adb. The APK build and signature verification passed against Android API 34; no device installation or deployment was performed. Camera2 behavior, target API 33 build, Android foreground rules, JPEG session reconfiguration, real MQTT broker behavior, browser layout, sustained FPS and the manual checklist remain unverified. No real-device security validation is claimed.
 
 ## Build in Termux
 
 Target: Galaxy S20 FE SM-G780G, Android 13/API 33, One UI 5.1, Termux from Google Play. No root, Gradle, Android Studio, proot or cloud build. Use packages from your existing Termux distribution.
 
 ```sh
-pkg install git openjdk-21 aapt aapt2 d8 apksigner zip coreutils
+pkg install git openjdk-21 aapt aapt2 d8 apksigner zip coreutils curl
 ```
 
-Provision the official API 33 android.jar at $HOME/.local/share/android-sdk/platforms/android-33/android.jar or set ANDROID_PLATFORM_JAR. Guide: https://github.com/davidglt/wireless-debugging/blob/main/docs/android-platform-33.md
+Provision the official API 33 android.jar at $HOME/.local/share/android-sdk/platforms/android-33/android.jar or set ANDROID_PLATFORM_JAR. Guide: https://github.com/davidglt/wireless-debugging/blob/main/docs/android-platform-33.md. The build downloads HiveMQ MQTT Client 1.4.2 and its pinned runtime dependencies from Maven Central into the user cache, verifies every SHA-256 digest, and packages them into the APK. No broker configuration or credentials are bundled.
 
 ```sh
 git pull --ff-only && bash build.sh
@@ -279,11 +301,12 @@ Read-only endpoints remain unauthenticated, and all HTTP traffic (including the 
 - `/snapshot.jpg`: unchanged latest complete snapshot.
 - `/stream.mjpg`: `multipart/x-mixed-replace; boundary=observatoryframe`. Each part is `--observatoryframe`, CRLF, `Content-Type: image/jpeg`, CRLF, `Content-Length: N`, CRLF, CRLF, N JPEG bytes, CRLF. Responses carry `Cache-Control: no-store, no-cache, must-revalidate, max-age=0` and `Pragma: no-cache`.
 - `/`: self-contained viewer with a Settings button outside the image. Settings uses an in-memory token and sends it only in an `Authorization: Bearer` header; the page never puts it in a URL or persistent browser storage. Reloading/closing the page forgets the token.
+- `GET /api/telemetry`: public, read-only, bounded device/environment/capture display status and panel appearance. No broker host or credentials are returned.
 - `GET /api/config`: authenticated current settings and desired/effective resolution plus requested/effective target FPS, actual FPS and metadata estimate.
 - `GET /api/capabilities`: authenticated list of every JPEG output size from the selected rear Camera2 camera, with per-size minimum-frame duration, JPEG stall duration, informational metadata estimate and whether it is within the app's 8-megapixel resource bound.
 - `PUT /api/config`: authenticated `application/x-www-form-urlencoded` atomic update. Unsupported sizes, invalid FPS syntax/value, invalid fields or bad encoding reject the whole update; existing settings remain unchanged.
 
-The server only reads the atomically published private snapshot (the burned-in overlay is already in it). HTTP never opens the camera, starts capture or creates per-client camera sessions. Read-only viewer/snapshot/stream access remains unauthenticated; every configuration/capability API requires the admin bearer token. No cookie auth, permissive CORS or GET mutation is used. Requests require a numeric IPv4 Host authority; mutations additionally require a matching same-origin `Origin`, rejecting DNS hostnames and cross-origin requests. Headers are limited to 8192 bytes and the complete request to 5 s; API bodies to 4096 bytes. No token is logged or embedded in HTML.
+The server only reads the atomically published private snapshot (the burned-in overlay is already in it). HTTP never opens the camera, starts capture or creates per-client camera sessions. Read-only viewer/snapshot/stream and telemetry access remains unauthenticated; configuration/capability APIs require the admin bearer token. No cookie auth, permissive CORS or GET mutation is used. Requests require a numeric IPv4 Host authority; mutations additionally require a matching same-origin `Origin`, rejecting DNS hostnames and cross-origin requests. Headers are limited to 8192 bytes and the complete request to 5 s; API bodies to 4096 bytes. No token or broker credential is logged or embedded in HTML.
 
 The app generates a cryptographically random 256-bit token in app-private storage only when explicitly asked through the DUMP-protected SSH/ADB control command. The first call provisions it if absent; subsequent calls retrieve the same value. Rotation replaces it so the old token immediately fails:
 
@@ -302,7 +325,7 @@ Stream semantics:
 - Client disconnect: detected within about 200 ms (or on write); its thread, socket and stream slot are released.
 - HTTP service stop (or restart): the listener and every client socket are closed, all server threads are joined for at most about 2 s and a later Start begins with fresh state. Nothing restarts automatically.
 
-Resource limits (constants in SnapshotHttpServer and CameraCapabilities): at most 8 simultaneous connections (one thread each, extra connections get 503 and are closed); at most 2 of them may be streams (further streams get 503), so streams cannot occupy all slots and snapshot requests keep being served. Request headers are limited to 8192 bytes; header plus API body has a 5 s total deadline. API bodies are at most 4096 bytes; `camera.properties` is at most 8192 bytes. A write that does not complete within 10 s (slow or stalled reader) closes that connection. Memory is bounded: each client holds at most one frame (stream frames up to 8 MiB, snapshots up to 16 MiB, larger images are not streamed or served with 503), no queues, frame history or extra files are kept. Camera capture itself is sequential with one in-flight request, JPEG output is limited to 8 megapixels and 16 MiB, `ImageReader` maxImages 2 and at most three frame bitmaps; metadata FPS estimates are informational, not capture limits. No sustainable device FPS is promised. Larger advertised JPEG sizes remain visible in capability metadata but cannot be selected by this app.
+Resource limits (constants in SnapshotHttpServer and CameraCapabilities): at most 8 simultaneous connections (one thread each, extra connections get 503 and are closed); at most 2 of them may be streams (further streams get 503), so streams cannot occupy all slots and snapshot requests keep being served. Request headers are limited to 8192 bytes; header plus API body has a 5 s total deadline. API bodies are at most 4096 bytes; `camera.properties` is at most 8192 bytes; accepted MQTT JSON payloads are at most 4096 bytes. A write that does not complete within 10 s (slow or stalled reader) closes that connection. Memory is bounded: each client holds at most one frame (stream frames up to 8 MiB, snapshots up to 16 MiB, larger images are not streamed or served with 503), no queues, frame history or extra files are kept. Camera capture itself is sequential with one in-flight request, JPEG output is limited to 8 megapixels and 16 MiB, `ImageReader` maxImages 2 and at most three frame bitmaps; metadata FPS estimates are informational, not capture limits. No sustainable device FPS is promised. Larger advertised JPEG sizes remain visible in capability metadata but cannot be selected by this app.
 
 Automated tests (`bash test/run.sh`, pure Java, no Android/camera/browser): multipart framing and JPEG decode, new-frame-only behavior, idle end, concurrent snapshot and stream clients, stream and connection limits, disconnects, a non-reading slow client, stop with open streams, repeated restart and thread cleanup. These tests do not validate phones, browsers, Motion or sustained performance.
 
@@ -316,7 +339,7 @@ SSH-only real-device/browser validation checklist (not yet performed; record res
 6. Stop capture: the stream must stop updating and end after about 60 s. Close a client: the next stream must connect.
 7. Stop the HTTP service with the existing script: open streams must close at once and the port must be refused; start again and repeat step 2.
 8. Check `adb -s "$TARGET" logcat -d -s SnapshotHttp:I` and memory (`dumpsys meminfo local.termux.observatorycamera`) after several minutes of streaming; sustained performance and Motion compatibility remain unvalidated until you test them.
-9. Run `admin-token-show`; open Settings, enter the token and load settings/capabilities. Confirm the responsive form includes Location, Date/time and FPS checkboxes, only actual advertised JPEG outputs, metadata timings/estimate and distinct requested target/actual FPS. Save with all fields unchecked and confirm none remain selected after save. Verify browser storage contains no token; Forget token and page reload must clear the entry.
+9. Run `admin-token-show`; open Settings, enter the token and load settings/capabilities. Confirm the responsive form includes independent overlay and panel selections, only actual advertised JPEG outputs, metadata timings/estimate and distinct requested target/actual FPS. Save with all overlay fields unchecked and confirm none remain selected after save. Verify browser storage contains no token; Forget token and page reload must clear the entry.
 10. Save a valid overlay/FPS update, including a rate above 9 and one above the metadata estimate. Try an unadvertised or over-8-megapixel `jpeg_size`; the update must fail and `config-show` must remain unchanged.
 11. While continuous capture is active, change JPEG size. Confirm `desired_size` changes first, then `effective_size` only after a frame-boundary session reconfiguration; camera ownership remains continuous, no second camera is opened, and service is not restarted. Force an unsupported/session failure and confirm a clear error plus safe cleanup.
 12. Run `admin-token-rotate`; the old token must fail and the newly printed token must work. Confirm the token never appears in URLs, logcat or HTML. Test mismatched Origin/Host, DNS-name Host, missing auth, oversized body and slow header/body rejection. These checks are not complete until performed on a device/browser.
@@ -327,7 +350,7 @@ The app sets Camera2 JPEG_ORIENTATION from the physical device angle (Orientatio
 
 With the overlay disabled, Camera2 JPEG bytes are saved unchanged (no bitmap rotation or re-encoding); the camera HAL may either rotate the pixels or set the EXIF orientation tag, so use a viewer that honors EXIF. With the overlay enabled the JPEG is decoded, the EXIF orientation is applied exactly once and the result is re-encoded without an EXIF block (implicitly upright; see below). Snapshots taken before this change must be recaptured. Orientation is ambiguous when the device lies flat (the sensor reports unknown), so the last valid angle is used.
 
-Pure tests (no Gradle, no Android): `bash test/run.sh` covers orientation math and SnapshotHttpServer start/stop/restart/occupied-port/active-socket shutdown. SnapshotHttpService, the MainActivity controls and the manifest changes were not compiled against the Android API or run on a device in the authoring environment (no android.jar/aapt2/d8); run `bash build.sh` in Termux and the validation above.
+Pure tests (no Gradle, no Android): `bash test/run.sh` covers orientation math, telemetry validation/conversions, settings round trips, overlays and SnapshotHttpServer lifecycle/authentication. The full APK compiled and signed with the installed Android API 34 toolchain; it was not installed or exercised on a phone. Complete the device/browser checklist above in Termux.
 
 Manual validation on the phone: capture and fetch the HTTP snapshot in a viewer honoring EXIF; it must appear upright in each case:
 1. Portrait.

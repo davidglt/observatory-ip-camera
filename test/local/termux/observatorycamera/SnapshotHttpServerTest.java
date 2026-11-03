@@ -61,7 +61,9 @@ public final class SnapshotHttpServerTest {
             AdminTokenStore tokenStore = new AdminTokenStore(dir);
             String token = tokenStore.provision();
             SnapshotHttpServer server = new SnapshotHttpServer(image, 0, m -> { }, tokenStore,
-                (method, path, body) -> new SnapshotHttpServer.ApiResult(200, "OK", "{\"ok\":true}"));
+                (method, path, body) -> new SnapshotHttpServer.ApiResult(200, "OK", "{\"ok\":true}"),
+                () -> new SnapshotHttpServer.ApiResult(200, "OK",
+                    "{\"environment_state\":\"disabled\",\"telemetry_position\":\"left\"}"));
             servers.add(server);
             check(!server.isRunning(), "not running before start");
             server.stop(); // stop before start is safe
@@ -81,6 +83,12 @@ public final class SnapshotHttpServerTest {
             byte[] head = request(port, "HEAD", "/snapshot.jpg");
             check(head.length == indexOf(head, "\r\n\r\n") + 4, "HEAD has no body");
             check(indexOf(request(port, "GET", "/other"), "404 Not Found") > 0, "other path 404");
+            byte[] telemetry = request(port, "GET", "/api/telemetry");
+            check(indexOf(telemetry, "200 OK") > 0 && indexOf(telemetry, "\"environment_state\":\"disabled\"") > 0
+                && indexOf(telemetry, "\"telemetry_position\":\"left\"") > 0,
+                "read-only telemetry matches public viewer access");
+            check(indexOf(request(port, "PUT", "/api/telemetry"), "405 Method Not Allowed") > 0,
+                "public telemetry is read-only");
             check(indexOf(request(port, "POST", "/snapshot.jpg"), "405") > 0, "POST rejected");
             check(indexOf(request(port, "GET", "/", "Host: 127.0.0.1:18080\r\n", new byte[0]), "200 OK") > 0,
                 "numeric forwarded Host supports SSH tunnels");
@@ -96,6 +104,21 @@ public final class SnapshotHttpServerTest {
             check(viewerText.contains("<p>Settings require the device-admin token.</p>")
                 && !viewerText.contains("Read-only viewer.") && !viewerText.contains("Frames appear only"),
                 "viewer shows only the requested token reminder");
+            check(viewerText.contains("name=\"telemetry_position\"")
+                && viewerText.contains("<option value=\"left\">Left</option><option value=\"right\">Right</option>")
+                && viewerText.contains("#viewer[data-telemetry-position=left]")
+                && viewerText.contains("@media(max-width:800px){#viewer,#viewer[data-telemetry-position]")
+                && viewerText.contains("$('viewer').dataset.telemetryPosition=d.telemetry_position"),
+                "panel position is saved, live-updated, and stacked below on narrow screens");
+            check(viewerText.contains("name=\"text_color\" type=\"text\"")
+                && viewerText.contains("name=\"panel_text_color\" type=\"text\"")
+                && viewerText.contains("name=\"panel_background_color\" type=\"text\"")
+                && viewerText.contains("data-color-picker=\"text_color\"")
+                && viewerText.contains("data-color-picker=\"panel_text_color\"")
+                && viewerText.contains("data-color-picker=\"panel_background_color\"")
+                && viewerText.contains("p.oninput=()=>{f.value=p.value}")
+                && viewerText.contains("f.oninput=()=>{if(/^#[0-9a-fA-F]{6}$/.test(f.value))p.value=f.value}"),
+                "independent editable RGB fields and visual pickers synchronize in both directions");
             check(indexOf(request(port, "GET", "/api/config"), "401 Unauthorized") > 0, "admin API requires bearer token");
             String auth = "Authorization: Bearer " + token + "\r\n";
             check(indexOf(request(port, "GET", "/api/config", auth, new byte[0]), "200 OK") > 0, "authenticated GET");

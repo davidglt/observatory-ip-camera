@@ -45,13 +45,18 @@ public final class SnapshotHttpServer {
     private static final String VIEWER = "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
         + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Observatory camera</title>"
         + "<style>body{margin:0;background:#111;color:#ccc;font-family:sans-serif;overflow-x:hidden}header{display:flex;align-items:center;gap:1em;padding:8px}"
-        + "img{display:block;max-width:100%;height:auto;margin:0 auto}p{margin:8px;font-size:small}#settings{padding:1em;background:#222;box-sizing:border-box;max-width:100%}"
+        + "#viewer{display:grid;grid-template-columns:minmax(0,1fr) 260px;grid-template-areas:'image telemetry';gap:12px;padding:12px;align-items:start;min-width:0}"
+        + "#viewer[data-telemetry-position=left]{grid-template-columns:260px minmax(0,1fr);grid-template-areas:'telemetry image'}"
+        + "img{grid-area:image;display:block;max-width:100%;height:auto;margin:0 auto}#telemetry{grid-area:telemetry;box-sizing:border-box;border:1px solid currentColor;background:#000;color:#f00;padding:12px;white-space:pre-wrap;overflow-wrap:anywhere;min-width:0;font:16px/1.45 monospace}"
+        + "p{margin:8px;font-size:small}#settings{padding:1em;background:#222;box-sizing:border-box;max-width:100%}"
         + "#form:not([hidden]){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;min-width:0}"
         + "#settings label{display:flex;flex-direction:column;gap:6px;min-width:0;margin:0}#settings input:not([type=checkbox]),#settings select{font:inherit;width:100%;min-width:0;box-sizing:border-box}"
+        + "#settings .color-control{display:flex;gap:6px;min-width:0}#settings .color-control input[type=color]{width:3em;height:2.5em;flex:none;padding:2px}"
         + "#settings fieldset{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;border:1px solid #666;min-width:0;margin:0;padding:10px}"
         + "#settings legend{grid-column:1/-1}"
         + "#settings fieldset label{flex-direction:row;align-items:center;gap:8px}#settings input[type=checkbox]{margin:0}"
         + "#form button{font:inherit;margin:0}#result{grid-column:1/-1;white-space:pre-wrap;overflow-wrap:anywhere}"
+        + "@media(max-width:800px){#viewer,#viewer[data-telemetry-position]{grid-template-columns:minmax(0,1fr);grid-template-areas:'image' 'telemetry'}}"
         + "@media(max-width:600px){#form:not([hidden]){grid-template-columns:minmax(0,1fr)}#settings fieldset{grid-template-columns:minmax(0,1fr)}}"
         + "#settings[hidden]{display:none}</style>"
         + "</head><body><header><strong>Observatory camera</strong><button id=\"settings-button\" type=\"button\">Settings</button></header>"
@@ -61,23 +66,47 @@ public final class SnapshotHttpServer {
         + "<form id=\"form\" hidden><label>Overlay <select name=\"overlay\"><option>on</option><option>off</option></select></label>"
         + "<label>Location <input name=\"location\" maxlength=\"24\"></label><label>Position <select name=\"position\">"
         + "<option>bottom-left</option><option>bottom-right</option><option>top-left</option><option>top-right</option></select></label>"
+        + "<label>Panel position <select name=\"telemetry_position\"><option value=\"left\">Left</option><option value=\"right\">Right</option></select></label>"
         + "<label>Text size <input name=\"text_size\" type=\"number\" min=\"10\" max=\"96\"></label>"
         + "<fieldset><legend>Visible overlay fields</legend><label><input type=\"checkbox\" name=\"visible_field\" value=\"location\">Location</label>"
         + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"datetime\">Date/time</label>"
-        + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"fps\">FPS</label></fieldset>"
-        + "<label>Text color <select name=\"text_color\"><option>green</option></select></label>"
+        + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"fps\">FPS (actual/requested)</label>"
+        + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"temperature\">Environmental temperature</label>"
+        + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"humidity\">Environmental humidity</label>"
+        + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"pressure\">Environmental pressure</label>"
+        + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"battery\">Battery level</label>"
+        + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"battery_temperature\">Battery temperature</label>"
+        + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"charging\">Charging status</label>"
+        + "<label><input type=\"checkbox\" name=\"visible_field\" value=\"thermal\">Thermal status</label></fieldset>"
+        + "<label>Show telemetry panel <input name=\"panel_enabled\" type=\"checkbox\"></label>"
+        + "<label>Panel text color <span class=\"color-control\"><input name=\"panel_text_color\" type=\"text\" maxlength=\"7\"><input type=\"color\" data-color-picker=\"panel_text_color\" aria-label=\"Panel text color picker\"></span></label>"
+        + "<label>Panel background color <span class=\"color-control\"><input name=\"panel_background_color\" type=\"text\" maxlength=\"7\"><input type=\"color\" data-color-picker=\"panel_background_color\" aria-label=\"Panel background color picker\"></span></label>"
+        + "<label>Panel text size <input name=\"panel_text_size\" type=\"number\" min=\"10\" max=\"48\"></label>"
+        + "<fieldset><legend>Panel groups</legend><label><input type=\"checkbox\" name=\"panel_environment\">Environment</label>"
+        + "<label><input type=\"checkbox\" name=\"panel_device\">Device</label>"
+        + "<label><input type=\"checkbox\" name=\"panel_capture\">Capture</label></fieldset>"
+        + "<label>MQTT broker host (blank disables) <input name=\"mqtt_host\" maxlength=\"253\"></label>"
+        + "<label>MQTT port <input name=\"mqtt_port\" type=\"number\" min=\"1\" max=\"65535\"></label>"
+        + "<label>MQTT topic <input name=\"mqtt_topic\" maxlength=\"128\"></label>"
+        + "<label>MQTT TLS <input name=\"mqtt_tls\" type=\"checkbox\"></label>"
+        + "<label>Sensor stale threshold (seconds) <input name=\"mqtt_stale_seconds\" type=\"number\" min=\"10\" max=\"3600\"></label>"
+        + "<p>MQTT credentials are configured only in the private device file, never in browser settings.</p>"
+        + "<label>Overlay text color <span class=\"color-control\"><input name=\"text_color\" type=\"text\" maxlength=\"7\"><input type=\"color\" data-color-picker=\"text_color\" aria-label=\"Overlay text color picker\"></span></label>"
         + "<label>JPEG size <select name=\"jpeg_size\"></select></label>"
         + "<label>Target FPS <input name=\"target_fps\" type=\"number\" min=\"0.1\" step=\"0.1\"></label>"
         + "<button type=\"submit\">Save settings</button></form><pre id=\"result\" aria-live=\"polite\"></pre></section>"
-        + "<img src=\"/stream.mjpg\" alt=\"Live camera stream\">"
+        + "<main id=\"viewer\"><img src=\"/stream.mjpg\" alt=\"Live camera stream\"><aside id=\"telemetry\" aria-label=\"Camera telemetry\" hidden></aside></main>"
         + "<p>Settings require the device-admin token.</p>"
         + "<script nonce=\"__NONCE__\">(()=>{let token='';const $=id=>document.getElementById(id),form=$('form'),result=$('result');"
         + "$('settings-button').onclick=()=>{$('settings').hidden=!$('settings').hidden};"
         + "$('clear').onclick=()=>{token='';$('token').value='';form.hidden=true;result.textContent='Token forgotten from memory.'};"
         + "async function api(path,method='GET',body){const r=await fetch(path,{method,mode:'same-origin',credentials:'omit',cache:'no-store',headers:{'Authorization':'Bearer '+token,...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},body});"
         + "const data=await r.json();if(!r.ok)throw Error(data.error||('HTTP '+r.status));return data}"
-        + "function setSettings(s){for(const e of form.elements)if(e.name&&e.type!=='checkbox'&&s[e.name]!==undefined)e.value=s[e.name];"
+        + "function setSettings(s){for(const e of form.elements)if(e.name&&s[e.name]!==undefined){if(e.type==='checkbox')e.checked=s[e.name]==='on';else e.value=s[e.name]}"
+        + "for(const p of form.querySelectorAll('[data-color-picker]')){const f=form.elements[p.dataset.colorPicker];p.value=/^#[0-9a-fA-F]{6}$/.test(f.value)?f.value:'#00ff00'}"
         + "const visible=new Set(s.fields&&s.fields!=='none'?s.fields.split(','):[]);for(const e of form.querySelectorAll('input[name=visible_field]'))e.checked=visible.has(e.value)}"
+        + "for(const p of form.querySelectorAll('[data-color-picker]')){const f=form.elements[p.dataset.colorPicker];p.oninput=()=>{f.value=p.value};f.onchange=p.oninput;"
+        + "f.oninput=()=>{if(/^#[0-9a-fA-F]{6}$/.test(f.value))p.value=f.value}}"
         + "$('load').onclick=async()=>{token=$('token').value;try{const [c,k]=await Promise.all([api('/api/config'),api('/api/capabilities')]);"
         + "const s=c.settings;setSettings(s);"
         + "const size=form.elements.jpeg_size;size.replaceChildren();const a=new Option('auto — nearest to 1280x720 ('+k.auto_size+')','auto');a.disabled=!k.auto_supported;size.append(a);"
@@ -86,12 +115,31 @@ public final class SnapshotHttpServer {
         + "form.hidden=false;result.textContent='Requested target FPS: '+s.target_fps+'; effective target: '+c.effective_target_fps+'; metadata estimate: '+c.metadata_estimate_fps+'; actual FPS: '+c.actual_fps+'; desired size: '+c.desired_size+'; effective size: '+c.effective_size+'; '+(c.reload_error||'')"
         + "}catch(e){token='';$('token').value='';form.hidden=true;result.textContent='Could not load settings: '+e.message}};"
         + "form.onsubmit=async e=>{e.preventDefault();const p=new URLSearchParams(new FormData(form));"
+        + "for(const x of form.querySelectorAll('input[type=checkbox][name]:not([name=visible_field])'))p.set(x.name,x.checked?'on':'off');"
         + "const visible=Array.from(form.querySelectorAll('input[name=visible_field]:checked'),x=>x.value);p.delete('visible_field');p.set('fields',visible.length?visible.join(','):'none');"
         + "try{const c=await api('/api/config','PUT',p.toString());setSettings(c.settings);result.textContent='Saved.';"
-        + "}catch(e){result.textContent='Not saved: '+e.message}}})()</script></body></html>\n";
+        + "}catch(e){result.textContent='Not saved: '+e.message}};"
+        + "async function updateTelemetry(){const panel=$('telemetry');try{const r=await fetch('/api/telemetry',{mode:'same-origin',credentials:'omit',cache:'no-store'});"
+        + "if(!r.ok)throw Error();const d=await r.json();panel.hidden=!d.panel_enabled;panel.style.color=d.panel_text_color;panel.style.backgroundColor=d.panel_background_color;"
+        + "$('viewer').dataset.telemetryPosition=d.telemetry_position;"
+        + "panel.style.fontSize=d.panel_text_size+'px';const lines=[];"
+        + "if(d.panel_environment){lines.push('Environment','Temperature: '+d.environment_temperature_c+' C','Humidity: '+d.environment_humidity_pct+' %',"
+        + "'Pressure: '+d.environment_pressure_hpa+' hPa','Sensor: '+d.environment_state)}"
+        + "if(d.panel_device){lines.push('Device','Battery level: '+d.battery_percent+' %','Battery temperature: '+d.battery_temperature_c+' C',"
+        + "'Charging status: '+d.charging,'Thermal status: '+d.thermal_status)}"
+        + "if(d.panel_capture){lines.push('Capture','Capture state: '+d.capture_state,'HTTP server: '+d.http_server_state,"
+        + "'Latest image age: '+d.latest_image_age_seconds+' s','FPS actual/requested: '+d.actual_fps+' / '+d.requested_fps,"
+        + "'Processing ms last/average/maximum: '+d.processing_last_ms+' / '+d.processing_average_ms+' / '+d.processing_maximum_ms)}"
+        + "panel.textContent=lines.join('\\n')}catch(e){panel.hidden=false;panel.textContent='Telemetry unavailable'}}"
+        + "updateTelemetry();setInterval(updateTelemetry,2000)})()</script></body></html>\n";
 
     public interface AdminApi {
         ApiResult handle(String method, String path, byte[] body);
+    }
+
+    /** Public, read-only snapshot endpoint matching the existing public image viewer. */
+    public interface PublicTelemetryApi {
+        ApiResult handle();
     }
 
     public static final class ApiResult {
@@ -109,6 +157,7 @@ public final class SnapshotHttpServer {
     private final Consumer<String> log;
     private final AdminTokenStore tokenStore;
     private final AdminApi adminApi;
+    private final PublicTelemetryApi telemetryApi;
     private final Object lock = new Object();
     private Session session;
     private volatile Runnable onTerminated;
@@ -126,11 +175,17 @@ public final class SnapshotHttpServer {
     }
 
     public SnapshotHttpServer(File snapshot, int port, Consumer<String> log, AdminTokenStore tokenStore, AdminApi adminApi) {
+        this(snapshot, port, log, tokenStore, adminApi, null);
+    }
+
+    public SnapshotHttpServer(File snapshot, int port, Consumer<String> log, AdminTokenStore tokenStore,
+                              AdminApi adminApi, PublicTelemetryApi telemetryApi) {
         this.snapshot = snapshot;
         this.port = port;
         this.log = log;
         this.tokenStore = tokenStore;
         this.adminApi = adminApi;
+        this.telemetryApi = telemetryApi;
     }
 
     /** Test hook; applies to the next start(). */
@@ -388,6 +443,18 @@ public final class SnapshotHttpServer {
             }
             String path = parts[1].split("\\?", 2)[0];
             if (path.startsWith("/api/")) {
+                if (path.equals("/api/telemetry")) {
+                    if (!parts[0].equals("GET") || telemetryApi == null) {
+                        reply(conn, output, telemetryApi == null ? 404 : 405,
+                            telemetryApi == null ? "Not Found" : "Method Not Allowed",
+                            "application/json; charset=utf-8", bytes("{\"error\":\"not-found\"}"), head, "");
+                    } else {
+                        ApiResult result = telemetryApi.handle();
+                        reply(conn, output, result.status, result.reason, "application/json; charset=utf-8",
+                            result.body, false, "");
+                    }
+                    return;
+                }
                 handleApi(conn, output, parts[0], path, headers, host, deadline);
                 return;
             }
