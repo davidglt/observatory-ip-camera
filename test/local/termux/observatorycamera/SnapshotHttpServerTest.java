@@ -141,7 +141,8 @@ public final class SnapshotHttpServerTest {
                 "settings are grouped into titled sections with narrow-screen columns");
             check(viewerText.contains("text.textContent=String(value)")
                 && viewerText.contains("['FPS',d.actual_fps+' / '+d.requested_fps]")
-                && viewerText.contains("margin-left:4ch;white-space:normal;overflow-wrap:anywhere")
+                && viewerText.contains("margin-left:4ch;max-width:calc(100% - 4ch);white-space:normal;overflow-wrap:anywhere")
+                && viewerText.contains("nameWidth=Math.max(name.getBoundingClientRect().width,name.scrollWidth)")
                 && viewerText.contains(".telemetry-group+.telemetry-group{border-top:1px solid currentColor")
                 && viewerText.contains("new ResizeObserver(layoutTelemetryRows)")
                 && viewerText.contains("window.addEventListener('resize',layoutTelemetryRows)")
