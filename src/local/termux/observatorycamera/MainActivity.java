@@ -35,6 +35,8 @@ public final class MainActivity extends Activity {
     private boolean busy;
     private boolean resumed;
     private boolean capturePending;
+    private String captureId = "-";
+    private boolean noPrompt;
     private boolean permissionRequested;
     private TextView serverStatus;
     private boolean serverStartPending;
@@ -171,7 +173,15 @@ public final class MainActivity extends Activity {
     private void consumeCaptureIntent() {
         if (getIntent().getBooleanExtra("capture", false)) {
             getIntent().removeExtra("capture");
-            if (!busy) capturePending = true;
+            boolean silent = getIntent().getBooleanExtra("no_prompt", false);
+            getIntent().removeExtra("no_prompt");
+            String id = getIntent().getStringExtra(ControlCommand.EXTRA_REQUEST_ID);
+            getIntent().removeExtra(ControlCommand.EXTRA_REQUEST_ID);
+            if (!busy) {
+                capturePending = true;
+                noPrompt = silent;
+                captureId = ControlCommand.isValidRequestId(id) ? id : "-";
+            }
         }
     }
 
@@ -182,6 +192,8 @@ public final class MainActivity extends Activity {
 
     private void requestCapture() {
         if (busy) return;
+        noPrompt = false;
+        captureId = "-";
         capturePending = true;
         tryPendingCapture();
     }
@@ -193,6 +205,12 @@ public final class MainActivity extends Activity {
             return;
         }
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            if (noPrompt) {
+                capturePending = false;
+                Log.e(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "failed", "reason=camera-permission-missing"));
+                report("Camera permission missing; not prompting (no_prompt).");
+                return;
+            }
             permissionRequested = true;
             requestPermissions(new String[]{Manifest.permission.CAMERA}, 1);
             return;
@@ -220,6 +238,7 @@ public final class MainActivity extends Activity {
             tryPendingCapture();
         } else {
             capturePending = false;
+            Log.e(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "failed", "reason=camera-permission-denied"));
             report("Camera permission denied.");
         }
     }
@@ -257,6 +276,7 @@ public final class MainActivity extends Activity {
                     try (FileOutputStream out = new FileOutputStream(pending)) { out.write(data); }
                     File destination = new File(getFilesDir(), "snapshot.jpg");
                     if (!pending.renameTo(destination)) throw new java.io.IOException("Could not publish snapshot.");
+                    Log.i(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "saved", "bytes=" + data.length + " size=" + image.getWidth() + "x" + image.getHeight()));
                     report("Snapshot saved: " + image.getWidth() + "x" + image.getHeight() + ", " + data.length + " bytes. File: snapshot.jpg");
                     handler.post(() -> { if (token == generation) closeCapture(); });
                 } catch (Exception e) { fail(e.toString()); }
@@ -306,7 +326,11 @@ public final class MainActivity extends Activity {
     }
 
     private void report(String message) { status.setText(message); Log.i(TAG, message); }
-    private void fail(String message) { report("Error: " + message); closeCapture(); }
+    private void fail(String message) {
+        report("Error: " + message);
+        if (busy) Log.e(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "failed", "reason=" + message));
+        closeCapture();
+    }
     private void closeCapture() {
         ++generation;
         handler.removeCallbacks(timeout);
@@ -317,6 +341,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onPause() {
         resumed = false;
+        if (capturePending || busy) Log.e(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "failed", "reason=activity-paused"));
         if (capturePending) report("Pending capture cancelled: activity paused.");
         capturePending = false;
         orientationListener.disable();

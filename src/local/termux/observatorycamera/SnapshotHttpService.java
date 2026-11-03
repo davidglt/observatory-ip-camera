@@ -14,7 +14,7 @@ import android.util.Log;
 import java.io.File;
 
 /**
- * Owns the snapshot HTTP server. Started only by an explicit user action in MainActivity (ACTION_START)
+ * Owns the snapshot HTTP server. Started only by an explicit user action in MainActivity or the shell-protected ControlActivity (ACTION_START)
  * and stopped by the Stop button or the notification Stop action. START_NOT_STICKY: if Android kills the
  * process the server is not resurrected. No boot receiver, wake lock or camera access.
  * Not declared with a foregroundServiceType: targetSdk 33 does not require one (see README).
@@ -22,6 +22,7 @@ import java.io.File;
 public final class SnapshotHttpService extends Service {
     public static final String ACTION_START = "local.termux.observatorycamera.action.START_SERVER";
     public static final String ACTION_STOP = "local.termux.observatorycamera.action.STOP_SERVER";
+    public static final String EXTRA_REQUEST_ID = "request_id";
     private static final String TAG = "SnapshotHttp";
     private static final String CHANNEL_ID = "snapshot_http";
     private static final int NOTIFICATION_ID = 1;
@@ -39,6 +40,7 @@ public final class SnapshotHttpService extends Service {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private SnapshotHttpServer server;
+    private String requestId = "-";
 
     private static void setState(boolean isRunning, String error) {
         running = isRunning;
@@ -51,6 +53,8 @@ public final class SnapshotHttpService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        String id = intent == null ? null : intent.getStringExtra(EXTRA_REQUEST_ID);
+        requestId = ControlCommand.isValidRequestId(id) ? id : "-";
         if (ACTION_START.equals(action)) handleStart();
         else handleStop();
         return START_NOT_STICKY;
@@ -87,16 +91,19 @@ public final class SnapshotHttpService extends Service {
         manager.notify(NOTIFICATION_ID, buildNotification("Listening on port " + server.getLocalPort()
             + ". No authentication or TLS: trusted LAN only."));
         setState(true, null);
+        Log.i(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "start", "listening", "port=" + server.getLocalPort()));
     }
 
     private void handleStop() {
         shutdown();
         setState(false, null);
+        Log.i(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "stop", "stopped", null));
         stopSelf();
     }
 
     private void fail(String message) {
         Log.e(TAG, message);
+        Log.e(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "start", "failed", "reason=" + message));
         shutdown();
         setState(false, message);
         stopSelf();
