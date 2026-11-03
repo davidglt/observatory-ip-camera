@@ -29,10 +29,16 @@ public final class ConfigStoreTest {
         ConfigStore.Loaded l = store.load();
         check(l.fileState.equals("missing") && l.config.describe().equals(CaptureConfig.defaults().describe()) && !live.exists(), "missing file uses defaults");
 
+        check(store.update("fields=").config.fieldsString().equals("none")
+            && new ConfigStore(dir).load().config.fieldsString().equals("none"), "empty field selection persists");
+        check(store.update("fields=location,datetime,fps,frames").config.fieldsString().equals("location,datetime,fps")
+            && new ConfigStore(dir).load().config.fieldsString().equals("location,datetime,fps"),
+            "legacy persisted fields migrate without frame counter");
+
         // Update, persistence across a new store instance (service restart / app update keeps filesDir).
         check(store.update("overlay=off target_fps=15.5 position=top-right").config != null, "fractional update ok");
         ConfigStore again = new ConfigStore(dir);
-        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps,frames target_fps=15.5 jpeg_size=auto text_color=green"), again.load().config.describe());
+        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps target_fps=15.5 jpeg_size=auto text_color=green"), again.load().config.describe());
         check(store.update("target_fps=10").config != null
             && new ConfigStore(dir).load().config.targetFpsString().equals("10.0"), "above-9 target persists across store instances");
         String saved = read(live);

@@ -28,8 +28,7 @@ public final class CaptureConfig {
     public static final int FIELD_LOCATION = 1;
     public static final int FIELD_DATETIME = 2;
     public static final int FIELD_FPS = 4;
-    public static final int FIELD_FRAMES = 8;
-    public static final int ALL_FIELDS = FIELD_LOCATION | FIELD_DATETIME | FIELD_FPS | FIELD_FRAMES;
+    public static final int ALL_FIELDS = FIELD_LOCATION | FIELD_DATETIME | FIELD_FPS;
 
     public static final String[] POSITIONS = {"bottom-left", "bottom-right", "top-left", "top-right"};
     public static final int MIN_TEXT_SIZE = 10;
@@ -38,7 +37,7 @@ public final class CaptureConfig {
     private static final Pattern LOCATION_PATTERN = Pattern.compile("[\\p{L}\\p{N}_.-]([\\p{L}\\p{N} _.-]*[\\p{L}\\p{N}_.-])?");
     private static final Pattern FPS_PATTERN = Pattern.compile("[0-9]+(\\.[0-9])?");
     private static final Pattern JPEG_SIZE_PATTERN = Pattern.compile("[1-9][0-9]{0,4}x[1-9][0-9]{0,4}");
-    private static final String[] FIELD_NAMES = {"location", "datetime", "fps", "frames"};
+    private static final String[] FIELD_NAMES = {"location", "datetime", "fps"};
 
     public final boolean overlayEnabled;
     public final String location;
@@ -58,7 +57,7 @@ public final class CaptureConfig {
         this.jpegSize = jpegSize;
     }
 
-    /** Conservative defaults: overlay on, NYX, bottom-left, size 24 (at 720 px short side), all fields, 1.0 FPS target. */
+    /** Conservative defaults: overlay on, NYX, bottom-left, size 24 (at 720 px short side), all visible fields, 1.0 FPS target. */
     public static CaptureConfig defaults() {
         return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10, "auto");
     }
@@ -111,7 +110,7 @@ public final class CaptureConfig {
             }
             case FIELDS: {
                 int mask = parseFields(value);
-                if (mask == 0) return "invalid-fields:expected-comma-list-of-" + String.join(",", FIELD_NAMES);
+                if (mask < 0) return "invalid-fields:expected-none-or-comma-list-of-" + String.join(",", FIELD_NAMES);
                 d.fields = mask;
                 return null;
             }
@@ -143,7 +142,8 @@ public final class CaptureConfig {
         Set<String> seen = new HashSet<>();
         for (String part : assignments.trim().split("\\s+")) {
             int eq = part.indexOf('=');
-            if (eq <= 0 || eq == part.length() - 1) return new Parsed(null, "malformed-assignment:" + safe(part));
+            if (eq <= 0 || (eq == part.length() - 1 && !part.substring(0, eq).equals(FIELDS)))
+                return new Parsed(null, "malformed-assignment:" + safe(part));
             String key = part.substring(0, eq);
             if (!seen.add(key)) return new Parsed(null, "duplicate-key:" + safe(key));
             String error = apply(draft, key, part.substring(eq + 1));
@@ -201,6 +201,7 @@ public final class CaptureConfig {
     public String targetFpsString() { return String.format(Locale.ROOT, "%d.%d", targetFpsTenths / 10, targetFpsTenths % 10); }
 
     public String fieldsString() {
+        if (fields == 0) return "none";
         List<String> names = new ArrayList<>();
         for (int i = 0; i < FIELD_NAMES.length; i++) if ((fields & (1 << i)) != 0) names.add(FIELD_NAMES[i]);
         return String.join(",", names);
@@ -217,11 +218,15 @@ public final class CaptureConfig {
     }
 
     static int parseFields(String value) {
+        if (value.equals("none") || value.isEmpty()) return 0;
         int mask = 0;
+        Set<String> seen = new HashSet<>();
         for (String name : value.split(",", -1)) {
+            if (!seen.add(name)) return -1;
+            if (name.equals("frames")) continue;
             int index = -1;
             for (int i = 0; i < FIELD_NAMES.length; i++) if (FIELD_NAMES[i].equals(name)) index = i;
-            if (index < 0 || (mask & (1 << index)) != 0) return 0;
+            if (index < 0) return -1;
             mask |= 1 << index;
         }
         return mask;

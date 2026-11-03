@@ -22,8 +22,9 @@ position=bottom-left
 # Text size 10-96, defined for a 720 px short image side and scaled to the image. Default: 24
 text_size=24
 
-# Comma-separated visible fields: location, datetime, fps, frames. Default: all four
-fields=location,datetime,fps,frames
+# Comma-separated visible fields: location, datetime, fps. Use none for no text.
+# Legacy frames entries are accepted but ignored. Default: all three
+fields=location,datetime,fps
 
 # JPEG output size: auto preserves the previous nearest-to-1280x720 selection,
 # or choose an exact size advertised by the selected camera, e.g. 1920x1080.

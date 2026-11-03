@@ -93,6 +93,9 @@ public final class SnapshotHttpServerTest {
                 "settings viewer has restrictive security headers");
             check(!viewerText.contains(token) && viewerText.contains("Forget token")
                 && viewerText.contains("stream.mjpg"), "viewer has no embedded token and preserves stream");
+            check(viewerText.contains("<p>Settings require the device-admin token.</p>")
+                && !viewerText.contains("Read-only viewer.") && !viewerText.contains("Frames appear only"),
+                "viewer shows only the requested token reminder");
             check(indexOf(request(port, "GET", "/api/config"), "401 Unauthorized") > 0, "admin API requires bearer token");
             String auth = "Authorization: Bearer " + token + "\r\n";
             check(indexOf(request(port, "GET", "/api/config", auth, new byte[0]), "200 OK") > 0, "authenticated GET");

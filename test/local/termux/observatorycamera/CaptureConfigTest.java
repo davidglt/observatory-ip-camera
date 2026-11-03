@@ -18,7 +18,7 @@ public final class CaptureConfigTest {
         check(d.overlayEnabled && d.location.equals("NYX") && d.position.equals("bottom-left"), "defaults");
         check(d.targetFpsTenths == 10 && d.targetIntervalNanos() == 1_000_000_000L, "default 1 FPS");
         check(d.jpegSize.equals("auto"), "legacy files retain automatic default resolution");
-        check(d.describe().equals("overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps,frames target_fps=1.0 jpeg_size=auto text_color=green"), d.describe());
+        check(d.describe().equals("overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps target_fps=1.0 jpeg_size=auto text_color=green"), d.describe());
         check(ok("target_fps=2").targetIntervalNanos() == 500_000_000L, "2 FPS interval");
         check(ok("target_fps=5").targetFpsTenths == 50, "multiple integer digits");
         check(ok("target_fps=10").targetFpsTenths == 100, "above 9 FPS");
@@ -35,11 +35,14 @@ public final class CaptureConfigTest {
         check(CaptureConfig.parse("target_fps=922337203685477580.8", d).error.equals("invalid-target_fps:outside-representable-range"), "overflow has clear error");
         check(ok("jpeg_size=1920x1080").jpegSize.equals("1920x1080"), "explicit JPEG size");
         check(ok("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime,frames").describe()
-            .equals("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime,frames target_fps=1.0 jpeg_size=auto text_color=green"), "multi");
-        check(ok("fields=frames,location").fieldsString().equals("location,frames"), "canonical field order");
+            .equals("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime target_fps=1.0 jpeg_size=auto text_color=green"), "legacy frame field is discarded");
+        check(ok("fields=frames,location").fieldsString().equals("location"), "legacy frame field is ignored");
+        check(ok("fields=").fieldsString().equals("none") && ok("fields=none").fieldsString().equals("none"),
+            "empty field selection is explicit");
+        check(ok("fields=location,datetime,fps").fieldsString().equals("location,datetime,fps"), "visible field order");
         for (String b : new String[]{"", "   ", "overlay", "overlay=", "=on", "overlay=yes", "location=", "location=a b".replace(' ', '$'),
             "location=" + new String(new char[25]).replace('\0', 'a'), "location=x;y", "position=middle", "text_size=9", "text_size=97", "text_size=abc",
-            "text_size=-5", "fields=", "fields=gps", "fields=fps,fps", "fields=fps,,frames", "target_fps=0", "target_fps=0.0",
+            "text_size=-5", "fields=gps", "fields=fps,fps", "fields=fps,,frames", "fields=frames,frames", "fields=none,location", "target_fps=0", "target_fps=0.0",
             "target_fps=1.25", "target_fps=1.", "target_fps=.5", "target_fps=-1", "target_fps=NaN", "target_fps=Infinity",
             "target_fps=922337203685477581", "bogus=1", "overlay=on overlay=off"}) bad(b);
         bad("jpeg_size=1280x0");
@@ -53,6 +56,12 @@ public final class CaptureConfigTest {
         check(CaptureConfig.fromEntries(entries).config.location.equals("Obs 1"), "space inside location allowed in files");
         entries.put("bogus", "1");
         check(CaptureConfig.fromEntries(entries).config == null, "unknown key rejects the whole set");
+        entries.clear();
+        entries.put("fields", "");
+        check(CaptureConfig.fromEntries(entries).config.fieldsString().equals("none"), "empty properties field selection");
+        entries.clear();
+        entries.put("fields", "frames");
+        check(CaptureConfig.fromEntries(entries).config.fieldsString().equals("none"), "legacy persisted frames field ignored");
         entries.clear();
         entries.put("location", " lead");
         check(CaptureConfig.fromEntries(entries).config == null, "leading space rejected");

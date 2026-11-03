@@ -87,7 +87,7 @@ Sustained JPEG capture runs in ContinuousCaptureService, started and stopped onl
 ```sh
 bash scripts/camera-control.sh -s "$TARGET" setup-permissions       # CAMERA + POST_NOTIFICATIONS, only when you choose
 bash scripts/camera-control.sh -s "$TARGET" config-show
-bash scripts/camera-control.sh -s "$TARGET" config-set overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps,frames jpeg_size=auto target_fps=1
+bash scripts/camera-control.sh -s "$TARGET" config-set overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps jpeg_size=auto target_fps=1
 bash scripts/camera-control.sh -s "$TARGET" admin-token-show
 bash scripts/camera-control.sh -s "$TARGET" admin-token-show       # explicitly provision/retrieve token for the browser
 bash scripts/camera-control.sh -s "$TARGET" admin-token-rotate    # invalidate old token and print a new one
@@ -110,13 +110,13 @@ Overlay (default on, burned into the JPEG pixels so snapshot clients and any lat
 ```
 NYX
 2026-11-03 18:00:00 CET
-FPS: 0.98 | Frames: 12
+FPS: 0.9 / 1.0
 ```
-NYX is a configurable text label, not GPS; no location permission is used. FPS shows `--` until it can be measured. Single capture uses the same overlay with `FPS: --` and `Frames: 1`.
+NYX is a configurable text label, not GPS; no location permission is used. FPS shows measured actual capture/publication rate followed by the configured target; actual FPS shows `--` until it can be measured. Single capture uses the same overlay with `FPS: -- / 1.0`. The visible-field selection controls Location, Date/time, and FPS; frame counts remain internal diagnostics and are not drawn.
 
 Settings are stored in the human-readable UTF-8 file `files/camera.properties` (java.util.Properties format, read and written with explicit UTF-8 Reader/Writer) in app-private storage. It is the single authoritative store: `config-show`, `config-set` and `config-reset` read and update this same file. A commented example with the full schema and defaults is committed as `config/camera.properties.example`; the live device file is never committed (`camera.properties` is git-ignored).
 
-Schema (every key optional; missing keys use the default; unknown keys or invalid values are rejected): `overlay=on|off` (default on), `location=` 1-24 characters, letters/digits (any script), inner spaces, `_ . -` (default NYX; a text label, not GPS), `position=bottom-left|bottom-right|top-left|top-right` (default bottom-left), `text_size=10-96` (for a 720 px short side, scaled to the image; long lines shrink to fit; default 24), `fields=` comma list of location,datetime,fps,frames (default all), `jpeg_size=auto|WIDTHxHEIGHT` (default auto; exact selected-camera JPEG sizes only, with an 8-megapixel app limit), `target_fps` (default 1.0; positive, with at most one decimal digit, representable through 922337203685477580.7; metadata estimates are informational), `text_color=green` (only green with a black outline and shadow is supported). The file must be valid UTF-8 and at most 8192 bytes. `config-set` takes shell-safe KEY=VALUE assignments (location without spaces or non-ASCII there; use import for those). Shell, import and web writes validate the entire candidate and leave the old file unchanged on error.
+Schema (every key optional; missing keys use the default; unknown keys or invalid values are rejected): `overlay=on|off` (default on), `location=` 1-24 characters, letters/digits (any script), inner spaces, `_ . -` (default NYX; a text label, not GPS), `position=bottom-left|bottom-right|top-left|top-right` (default bottom-left), `text_size=10-96` (for a 720 px short side, scaled to the image; long lines shrink to fit; default 24), `fields=` comma list of location,datetime,fps (default all); use `none` or an empty field list for no visible text. Existing `frames` entries remain accepted for compatibility but are ignored and omitted when configuration is next saved. `jpeg_size=auto|WIDTHxHEIGHT` (default auto; exact selected-camera JPEG sizes only, with an 8-megapixel app limit), `target_fps` (default 1.0; positive, with at most one decimal digit, representable through 922337203685477580.7; metadata estimates are informational), `text_color=green` (only green with a black outline and shadow is supported). The file must be valid UTF-8 and at most 8192 bytes. `config-set` takes shell-safe KEY=VALUE assignments (location without spaces or non-ASCII there; use import for those). Shell, import and web writes validate the entire candidate and leave the old file unchanged on error.
 
 Export/import over authorized ADB, no touch UI:
 ```sh
@@ -316,7 +316,7 @@ SSH-only real-device/browser validation checklist (not yet performed; record res
 6. Stop capture: the stream must stop updating and end after about 60 s. Close a client: the next stream must connect.
 7. Stop the HTTP service with the existing script: open streams must close at once and the port must be refused; start again and repeat step 2.
 8. Check `adb -s "$TARGET" logcat -d -s SnapshotHttp:I` and memory (`dumpsys meminfo local.termux.observatorycamera`) after several minutes of streaming; sustained performance and Motion compatibility remain unvalidated until you test them.
-9. Run `admin-token-show`; open Settings, enter the token and load settings/capabilities. Confirm the form includes every overlay field, only actual advertised JPEG outputs, metadata timings/estimate and distinct requested target/actual FPS. Verify browser storage contains no token; Forget token and page reload must clear the entry.
+9. Run `admin-token-show`; open Settings, enter the token and load settings/capabilities. Confirm the responsive form includes Location, Date/time and FPS checkboxes, only actual advertised JPEG outputs, metadata timings/estimate and distinct requested target/actual FPS. Save with all fields unchecked and confirm none remain selected after save. Verify browser storage contains no token; Forget token and page reload must clear the entry.
 10. Save a valid overlay/FPS update, including a rate above 9 and one above the metadata estimate. Try an unadvertised or over-8-megapixel `jpeg_size`; the update must fail and `config-show` must remain unchanged.
 11. While continuous capture is active, change JPEG size. Confirm `desired_size` changes first, then `effective_size` only after a frame-boundary session reconfiguration; camera ownership remains continuous, no second camera is opened, and service is not restarted. Force an unsupported/session failure and confirm a clear error plus safe cleanup.
 12. Run `admin-token-rotate`; the old token must fail and the newly printed token must work. Confirm the token never appears in URLs, logcat or HTML. Test mismatched Origin/Host, DNS-name Host, missing auth, oversized body and slow header/body rejection. These checks are not complete until performed on a device/browser.

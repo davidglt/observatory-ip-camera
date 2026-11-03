@@ -406,8 +406,7 @@ public final class ContinuousCaptureService extends Service {
         try {
             CaptureConfig config = CaptureSettings.load(this);
             if (capabilities != null && capabilities.validate(config) != null) config = activeConfig;
-            int number = (int) Math.min(Integer.MAX_VALUE, stats.frames() + 1);
-            FrameOverlay.Result r = FrameOverlay.process(data, config, stats.fpsWith(acquired), number, wall, TimeZone.getTimeZone(zone));
+            FrameOverlay.Result r = FrameOverlay.process(data, config, stats.fpsWith(acquired), wall, TimeZone.getTimeZone(zone));
             if (r.jpeg.length > CameraCapabilities.MAX_JPEG_BYTES) throw new IOException("JPEG output exceeds the application byte limit.");
             boolean published = SnapshotPublisher.publish(getFilesDir(), "snapshot.jpg", r.jpeg, () -> gen == generation);
             if (!published) return;

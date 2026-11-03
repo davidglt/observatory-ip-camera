@@ -33,7 +33,7 @@ Subcommands:
   continuous-status  state, session frames, requested target and actual FPS, last capture time/age, processing diagnostics
   config-show        show the persistent capture/overlay settings
   config-set K=V ... validate and save settings atomically (overlay=on|off location=NAME position=bottom-left|bottom-right|top-left|top-right
-                     text_size=10-96 fields=location,datetime,fps,frames jpeg_size=auto|WIDTHxHEIGHT target_fps=positive FPS (one decimal place); applied from the next frame/session
+                     text_size=10-96 fields=location,datetime,fps|none jpeg_size=auto|WIDTHxHEIGHT target_fps=positive FPS (one decimal place); applied from the next frame/session
   config-reset       restore default settings
   config-export --out FILE   save the live camera.properties (normalized) to FILE on this host
   config-import --in FILE    upload FILE, validate it completely on the device, then replace the live settings
@@ -66,7 +66,7 @@ while [[ $# -gt 0 ]]; do
             [[ -z $SUB ]] || die $EX_USAGE "Only one subcommand allowed."; SUB=$1; shift ;;
         *=*)
             [[ $SUB == config-set ]] || die $EX_USAGE "Unexpected assignment '$1' (only valid after config-set)."
-            [[ $1 =~ ^[a-z_]+=[A-Za-z0-9_.,-]+$ ]] || die $EX_USAGE "Invalid assignment '$1': keys are lowercase, values use only A-Za-z0-9_.,-"
+            [[ $1 =~ ^([a-z_]+=[A-Za-z0-9_.,-]+|fields=)$ ]] || die $EX_USAGE "Invalid assignment '$1': keys are lowercase, values use only A-Za-z0-9_.,-"
             CONFIG="${CONFIG:+$CONFIG }$1"; shift ;;
         *) usage >&2; die $EX_USAGE "Unknown argument: $1" ;;
     esac

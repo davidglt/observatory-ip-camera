@@ -144,9 +144,11 @@ run_case "$ADB" -s T shell frobnicate >/dev/null 2>&1; [[ $? -eq 97 && -e $FAKE_
 rm -f "$FAKE_LOG.bad"
 # The deadline itself must work and clean up its children.
 CASE_TIMEOUT=2 run_case sleep 30; [[ $? -eq 124 ]] && echo "ok per-case deadline fires" || { echo "FAIL deadline"; fails=$((fails+1)); }
-FAKE_LOGLINE="cmd=config-show result=config overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps,frames target_fps=1.0" expect config-show 0 "location=NYX" -s T --no-wake --timeout 5 config-show
+FAKE_LOGLINE="cmd=config-show result=config overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps target_fps=1.0" expect config-show 0 "location=NYX" -s T --no-wake --timeout 5 config-show
 FAKE_LOGLINE="cmd=config-set result=config overlay=off applied=next-frame" expect config-set 0 "overlay=off" -s T --no-wake --timeout 5 config-set overlay=off
 grep -q -- "--es config 'overlay=off'" "$FAKE_LOG" && echo "ok config passed single-quoted" || { echo "FAIL config quoting"; fails=$((fails+1)); }
+FAKE_LOGLINE="cmd=config-set result=config fields=none applied=next-frame" expect config-set-no-fields 0 "fields=none" -s T --no-wake --timeout 5 config-set fields=
+grep -q -- "--es config 'fields='" "$FAKE_LOG" && echo "ok empty field selection passed" || { echo "FAIL empty field selection quoting"; fails=$((fails+1)); }
 FAKE_LOGLINE="cmd=config-set result=failed reason=invalid-config:invalid-text_size:expected-10-96" expect config-set-rejected 2 "nothing changed" -s T --no-wake --timeout 5 config-set text_size=5
 FAKE_LOGLINE="cmd=config-reset result=config overlay=on applied=next-frame" expect config-reset 0 "overlay=on" -s T --no-wake --timeout 5 config-reset
 printf 'overlay=on\nlocation=NYX\n' > "$T/export"

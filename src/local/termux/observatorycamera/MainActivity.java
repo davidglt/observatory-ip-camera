@@ -299,7 +299,7 @@ public final class MainActivity extends Activity {
                         imageWidth = image.getWidth();
                         imageHeight = image.getHeight();
                     }
-                    FrameOverlay.Result r = FrameOverlay.process(data, CaptureSettings.load(this), Double.NaN, 1, wall, TimeZone.getDefault());
+                    FrameOverlay.Result r = FrameOverlay.process(data, CaptureSettings.load(this), Double.NaN, wall, TimeZone.getDefault());
                     if (r.jpeg.length > CameraCapabilities.MAX_JPEG_BYTES)
                         throw new IOException("JPEG output exceeds the application byte limit.");
                     if (!SnapshotPublisher.publish(getFilesDir(), "snapshot.jpg", r.jpeg, () -> token == generation)) return;
