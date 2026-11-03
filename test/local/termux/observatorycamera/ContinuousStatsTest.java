@@ -42,7 +42,10 @@ public final class ContinuousStatsTest {
         File dir = Files.createTempDirectory("snap").toFile();
         byte[] jpeg = {(byte) 0xFF, (byte) 0xD8, 1, 2, 3, (byte) 0xFF, (byte) 0xD9};
         check(SnapshotPublisher.publish(dir, "snapshot.jpg", jpeg, () -> true), "published");
-        check(java.util.Arrays.equals(Files.readAllBytes(new File(dir, "snapshot.jpg").toPath()), jpeg) && !new File(dir, "snapshot.tmp").exists(), "complete file, no temp left");
+        File published = new File(dir, "snapshot.jpg");
+        check(java.util.Arrays.equals(Files.readAllBytes(published.toPath()), jpeg)
+            && published.lastModified() > 0 && !new File(dir, "snapshot.tmp").exists(),
+            "complete file records its successful publication time, no temp left");
         byte[] newer = {(byte) 0xFF, (byte) 0xD8, 9, 9, 9, (byte) 0xFF, (byte) 0xD9};
         check(!SnapshotPublisher.publish(dir, "snapshot.jpg", newer, () -> false), "stale session not published");
         check(java.util.Arrays.equals(Files.readAllBytes(new File(dir, "snapshot.jpg").toPath()), jpeg) && !new File(dir, "snapshot.tmp").exists(), "old file intact, temp removed");

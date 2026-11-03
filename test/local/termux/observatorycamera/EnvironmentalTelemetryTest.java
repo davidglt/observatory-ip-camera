@@ -12,6 +12,9 @@ public final class EnvironmentalTelemetryTest {
             "retained fresh sample accepted by source time");
         check(sensor.state(now, 120_000).equals("fresh"), "fresh state");
         EnvironmentalTelemetry.Reading first = sensor.latest();
+        check(sensor.accept(payload(now / 1000, 18, 30, 980).getBytes(StandardCharsets.UTF_8), true, now),
+            "same retained sample is ignored successfully");
+        check(sensor.latest().temperatureC == first.temperatureC, "same old retained timestamp cannot replace data");
         check(sensor.accept(payload(now / 1000 - 600, 19, 40, 1000).getBytes(StandardCharsets.UTF_8), true, now),
             "old retained sample does not fail connection");
         check(sensor.latest().timestampEpochMillis == first.timestampEpochMillis, "old retained sample cannot replace newer reading");

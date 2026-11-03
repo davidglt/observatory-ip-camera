@@ -2,7 +2,9 @@ package local.termux.observatorycamera;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /** Validates the bounded JSON payload and source-time freshness of the BME280 producer. */
 final class EnvironmentalTelemetry {
@@ -68,6 +70,7 @@ final class EnvironmentalTelemetry {
                 || pressure < 300 || pressure > 1100) return false;
             long timestampMillis = Math.round(timestamp * 1000.0);
             if (latest != null && timestampMillis < latest.timestampEpochMillis) return true;
+            if (retained && latest != null && timestampMillis == latest.timestampEpochMillis) return true;
             latest = new Reading(temperature, humidity, pressure, timestampMillis);
             connectionState = latest.freshness(nowMillis, DEFAULT_STALE_MILLIS);
             error = null;
@@ -101,16 +104,18 @@ final class EnvironmentalTelemetry {
             whitespace();
             expect('{');
             Map<String, Object> values = new HashMap<>();
+            Set<String> keys = new HashSet<>();
             whitespace();
             if (take('}')) { end(); return values; }
             do {
                 whitespace();
                 String key = string();
+                if (!keys.add(key)) throw new IllegalArgumentException("Duplicate key.");
                 whitespace();
                 expect(':');
                 whitespace();
                 Object value = value(0);
-                if (values.put(key, value) != null) throw new IllegalArgumentException("Duplicate key.");
+                values.put(key, value);
                 whitespace();
                 if (take('}')) break;
                 expect(',');
@@ -170,7 +175,7 @@ final class EnvironmentalTelemetry {
 
         private void digits(boolean required) {
             int start = index;
-            while (index < text.length() && Character.isDigit(text.charAt(index))) index++;
+            while (index < text.length() && text.charAt(index) >= '0' && text.charAt(index) <= '9') index++;
             if (required && start == index) throw new IllegalArgumentException("Bad number.");
         }
 

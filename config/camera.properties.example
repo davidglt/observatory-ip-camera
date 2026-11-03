@@ -22,8 +22,10 @@ position=bottom-left
 # Text size 10-96, defined for a 720 px short image side and scaled to the image. Default: 24
 text_size=24
 
-# Comma-separated visible fields: location, datetime, fps. Use none for no text.
-# Legacy frames entries are accepted but ignored. Default: all three
+# Comma-separated overlay fields: location, datetime, fps, temperature,
+# humidity, pressure, battery, battery_temperature, charging, thermal.
+# Use none for no overlay text. New telemetry fields default off.
+# Legacy frames entries are accepted but ignored. Default: existing three fields
 fields=location,datetime,fps
 
 # JPEG output size: auto preserves the previous nearest-to-1280x720 selection,
@@ -40,3 +42,24 @@ target_fps=1.0
 
 # Text colour. Only green (with black outline and shadow) is supported. Default: green
 text_color=green
+
+# Independent viewer telemetry panel. Default: shown with all groups enabled.
+panel_enabled=on
+panel_text_color=#ff0000
+panel_background_color=#000000
+panel_text_size=16
+panel_environment=on
+panel_device=on
+panel_capture=on
+
+# Optional BME280 MQTT subscriber. An empty host disables MQTT.
+# Configure only a broker you control; no host or username/password is assumed.
+mqtt_host=
+mqtt_port=1883
+mqtt_topic=homeassistant/nyx/reading
+mqtt_tls=off
+mqtt_stale_seconds=120
+
+# MQTT credentials are not stored in or exported with this file. When needed,
+# configure them separately in app-private files/mqtt-credentials.properties.
+# The credential file is never returned by APIs, logs, config-export or config-import.

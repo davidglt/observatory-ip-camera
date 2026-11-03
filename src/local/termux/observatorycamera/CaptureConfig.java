@@ -34,6 +34,7 @@ public final class CaptureConfig {
     public static final String MQTT_PORT = "mqtt_port";
     public static final String MQTT_TOPIC = "mqtt_topic";
     public static final String MQTT_TLS = "mqtt_tls";
+    public static final String MQTT_STALE_SECONDS = "mqtt_stale_seconds";
     public static final int MAX_LOCATION_LENGTH = 24;
 
     public static final int FIELD_LOCATION = 1;
@@ -61,7 +62,7 @@ public final class CaptureConfig {
     private static final Pattern JPEG_SIZE_PATTERN = Pattern.compile("[1-9][0-9]{0,4}x[1-9][0-9]{0,4}");
     private static final Pattern COLOR_PATTERN = Pattern.compile("#[0-9A-Fa-f]{6}");
     private static final Pattern MQTT_HOST_PATTERN = Pattern.compile("[A-Za-z0-9.-]{0,253}");
-    private static final Pattern MQTT_TOPIC_PATTERN = Pattern.compile("[A-Za-z0-9_./#-]{1,128}");
+    private static final Pattern MQTT_TOPIC_PATTERN = Pattern.compile("[A-Za-z0-9_./#+-]{1,128}");
 
     public final boolean overlayEnabled;
     public final String location;
@@ -81,12 +82,13 @@ public final class CaptureConfig {
     public final int mqttPort;
     public final String mqttTopic;
     public final boolean mqttTls;
+    public final int mqttStaleSeconds;
 
     private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields,
                           long targetFpsTenths, String jpegSize, boolean panelEnabled, String panelTextColor,
                           String panelBackgroundColor, int panelTextSize, boolean panelEnvironment,
                           boolean panelDevice, boolean panelCapture, String mqttHost, int mqttPort,
-                          String mqttTopic, boolean mqttTls) {
+                          String mqttTopic, boolean mqttTls, int mqttStaleSeconds) {
         this.overlayEnabled = overlayEnabled;
         this.location = location;
         this.position = position;
@@ -105,13 +107,14 @@ public final class CaptureConfig {
         this.mqttPort = mqttPort;
         this.mqttTopic = mqttTopic;
         this.mqttTls = mqttTls;
+        this.mqttStaleSeconds = mqttStaleSeconds;
     }
 
     /** Conservative defaults: overlay on, NYX, bottom-left, size 24 (at 720 px short side), all visible fields, 1.0 FPS target. */
     public static CaptureConfig defaults() {
         return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10, "auto",
             true, "#ff0000", "#000000", 16, true, true, true,
-            "", 1883, "homeassistant/nyx/reading", false);
+            "", 1883, "homeassistant/nyx/reading", false, 120);
     }
 
     /** Result of parsing: exactly one of config and error is non-null. */
@@ -141,6 +144,7 @@ public final class CaptureConfig {
         int mqttPort;
         String mqttTopic;
         boolean mqttTls;
+        int mqttStaleSeconds;
         Draft(CaptureConfig c) {
             overlay = c.overlayEnabled; location = c.location; position = c.position;
             textSize = c.textSize; fields = c.fields; fps = c.targetFpsTenths; jpegSize = c.jpegSize;
@@ -148,11 +152,12 @@ public final class CaptureConfig {
             panelBackgroundColor = c.panelBackgroundColor; panelTextSize = c.panelTextSize;
             panelEnvironment = c.panelEnvironment; panelDevice = c.panelDevice; panelCapture = c.panelCapture;
             mqttHost = c.mqttHost; mqttPort = c.mqttPort; mqttTopic = c.mqttTopic; mqttTls = c.mqttTls;
+            mqttStaleSeconds = c.mqttStaleSeconds;
         }
         CaptureConfig build() {
             return new CaptureConfig(overlay, location, position, textSize, fields, fps, jpegSize,
                 panelEnabled, panelTextColor, panelBackgroundColor, panelTextSize, panelEnvironment,
-                panelDevice, panelCapture, mqttHost, mqttPort, mqttTopic, mqttTls);
+                panelDevice, panelCapture, mqttHost, mqttPort, mqttTopic, mqttTls, mqttStaleSeconds);
         }
     }
 
@@ -227,20 +232,18 @@ public final class CaptureConfig {
                 else d.panelCapture = value.equals("on");
                 return null;
             case MQTT_HOST:
-                if (value.length() > 253 || !MQTT_HOST_PATTERN.matcher(value).matches()
-                    || value.startsWith(".") || value.endsWith(".") || value.contains(".."))
+                if (!validMqttHost(value))
                     return "invalid-mqtt_host:expected-hostname-or-empty";
                 d.mqttHost = value;
                 return null;
             case MQTT_PORT: {
-                int port = parseInt(value);
+                int port = parseBoundedInt(value, 5);
                 if (port < 1 || port > 65535) return "invalid-mqtt_port:expected-1-65535";
                 d.mqttPort = port;
                 return null;
             }
             case MQTT_TOPIC:
-                if (!MQTT_TOPIC_PATTERN.matcher(value).matches() || value.contains("//")
-                    || (value.contains("#") && !value.endsWith("#")))
+                if (!validMqttTopic(value))
                     return "invalid-mqtt_topic:expected-bounded-topic";
                 d.mqttTopic = value;
                 return null;
@@ -248,6 +251,12 @@ public final class CaptureConfig {
                 if (!value.equals("on") && !value.equals("off")) return "invalid-mqtt_tls:expected-on-or-off";
                 d.mqttTls = value.equals("on");
                 return null;
+            case MQTT_STALE_SECONDS: {
+                int seconds = parseInt(value);
+                if (seconds < 10 || seconds > 3600) return "invalid-mqtt_stale_seconds:expected-10-3600";
+                d.mqttStaleSeconds = seconds;
+                return null;
+            }
             default:
                 return "unknown-key:" + safe(key);
         }
@@ -261,7 +270,8 @@ public final class CaptureConfig {
         Set<String> seen = new HashSet<>();
         for (String part : assignments.trim().split("\\s+")) {
             int eq = part.indexOf('=');
-            if (eq <= 0 || (eq == part.length() - 1 && !part.substring(0, eq).equals(FIELDS)))
+            if (eq <= 0 || (eq == part.length() - 1 && !part.substring(0, eq).equals(FIELDS)
+                && !part.substring(0, eq).equals(MQTT_HOST)))
                 return new Parsed(null, "malformed-assignment:" + safe(part));
             String key = part.substring(0, eq);
             if (!seen.add(key)) return new Parsed(null, "duplicate-key:" + safe(key));
@@ -322,6 +332,7 @@ public final class CaptureConfig {
         m.put(MQTT_PORT, Integer.toString(mqttPort));
         m.put(MQTT_TOPIC, mqttTopic);
         m.put(MQTT_TLS, mqttTls ? "on" : "off");
+        m.put(MQTT_STALE_SECONDS, Integer.toString(mqttStaleSeconds));
         return m;
     }
 
@@ -380,6 +391,31 @@ public final class CaptureConfig {
     private static int parseInt(String value) {
         if (!value.matches("[0-9]{1,4}")) return -1;
         return Integer.parseInt(value);
+    }
+
+    private static int parseBoundedInt(String value, int digits) {
+        if (!value.matches("[0-9]{1," + digits + "}")) return -1;
+        try { return Integer.parseInt(value); } catch (NumberFormatException e) { return -1; }
+    }
+
+    private static boolean validMqttHost(String host) {
+        if (host.isEmpty()) return true;
+        if (host.length() > 253 || !MQTT_HOST_PATTERN.matcher(host).matches()) return false;
+        for (String label : host.split("\\.", -1)) {
+            if (label.isEmpty() || label.length() > 63 || label.startsWith("-") || label.endsWith("-")) return false;
+        }
+        return true;
+    }
+
+    private static boolean validMqttTopic(String topic) {
+        if (!MQTT_TOPIC_PATTERN.matcher(topic).matches() || topic.contains("//")) return false;
+        String[] levels = topic.split("/", -1);
+        for (int i = 0; i < levels.length; i++) {
+            String level = levels[i];
+            if (level.contains("#") && !(level.equals("#") && i == levels.length - 1)) return false;
+            if (level.contains("+") && !level.equals("+")) return false;
+        }
+        return true;
     }
 
     private static boolean contains(String[] values, String value) {

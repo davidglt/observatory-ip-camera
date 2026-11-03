@@ -18,7 +18,10 @@ public final class CaptureConfigTest {
         check(d.overlayEnabled && d.location.equals("NYX") && d.position.equals("bottom-left"), "defaults");
         check(d.targetFpsTenths == 10 && d.targetIntervalNanos() == 1_000_000_000L, "default 1 FPS");
         check(d.jpegSize.equals("auto"), "legacy files retain automatic default resolution");
-        check(d.describe().equals("overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps target_fps=1.0 jpeg_size=auto text_color=green"), d.describe());
+        check(d.describe().equals("overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps target_fps=1.0 jpeg_size=auto text_color=green panel_enabled=on panel_text_color=#ff0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120"), d.describe());
+        check(d.fields == CaptureConfig.ALL_FIELDS && !d.hasField(CaptureConfig.FIELD_TEMPERATURE)
+            && !d.hasField(CaptureConfig.FIELD_BATTERY) && !d.hasField(CaptureConfig.FIELD_THERMAL),
+            "new overlay fields default off");
         check(ok("target_fps=2").targetIntervalNanos() == 500_000_000L, "2 FPS interval");
         check(ok("target_fps=5").targetFpsTenths == 50, "multiple integer digits");
         check(ok("target_fps=10").targetFpsTenths == 100, "above 9 FPS");
@@ -35,21 +38,32 @@ public final class CaptureConfigTest {
         check(CaptureConfig.parse("target_fps=922337203685477580.8", d).error.equals("invalid-target_fps:outside-representable-range"), "overflow has clear error");
         check(ok("jpeg_size=1920x1080").jpegSize.equals("1920x1080"), "explicit JPEG size");
         check(ok("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime,frames").describe()
-            .equals("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime target_fps=1.0 jpeg_size=auto text_color=green"), "legacy frame field is discarded");
+            .equals("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime target_fps=1.0 jpeg_size=auto text_color=green panel_enabled=on panel_text_color=#ff0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120"), "legacy frame field is discarded");
         check(ok("fields=frames,location").fieldsString().equals("location"), "legacy frame field is ignored");
         check(ok("fields=").fieldsString().equals("none") && ok("fields=none").fieldsString().equals("none"),
             "empty field selection is explicit");
         check(ok("fields=location,datetime,fps").fieldsString().equals("location,datetime,fps"), "visible field order");
+        CaptureConfig configured = ok("fields=location,temperature,humidity,pressure,battery,battery_temperature,charging,thermal panel_enabled=off panel_text_color=#123456 panel_background_color=#abcdef panel_text_size=32 panel_environment=off panel_device=on panel_capture=off mqtt_host=broker.example mqtt_port=8883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=on mqtt_stale_seconds=600");
+        check(configured.fieldsString().equals("location,temperature,humidity,pressure,battery,battery_temperature,charging,thermal")
+            && !configured.panelEnabled && !configured.panelEnvironment && configured.panelDevice
+            && !configured.panelCapture && configured.panelTextColor.equals("#123456")
+            && configured.mqttHost.equals("broker.example") && configured.mqttPort == 8883
+            && configured.mqttTls && configured.mqttStaleSeconds == 600, "telemetry settings round trip");
+        check(ok("mqtt_host=").mqttHost.isEmpty(), "empty MQTT host disables subscriber");
         for (String b : new String[]{"", "   ", "overlay", "overlay=", "=on", "overlay=yes", "location=", "location=a b".replace(' ', '$'),
             "location=" + new String(new char[25]).replace('\0', 'a'), "location=x;y", "position=middle", "text_size=9", "text_size=97", "text_size=abc",
             "text_size=-5", "fields=gps", "fields=fps,fps", "fields=fps,,frames", "fields=frames,frames", "fields=none,location", "target_fps=0", "target_fps=0.0",
             "target_fps=1.25", "target_fps=1.", "target_fps=.5", "target_fps=-1", "target_fps=NaN", "target_fps=Infinity",
-            "target_fps=922337203685477581", "bogus=1", "overlay=on overlay=off"}) bad(b);
+            "target_fps=922337203685477581", "panel_text_color=red", "panel_background_color=#12345",
+            "panel_text_size=9", "panel_text_size=49", "panel_environment=yes", "mqtt_host=bad/host",
+            "mqtt_port=0", "mqtt_port=65536", "mqtt_host=-bad.example", "mqtt_topic=bad topic", "mqtt_topic=room/#/other",
+            "mqtt_tls=yes", "mqtt_stale_seconds=9",
+            "mqtt_stale_seconds=3601", "bogus=1", "overlay=on overlay=off"}) bad(b);
         bad("jpeg_size=1280x0");
         bad("jpeg_size=1280x720;reboot");
         CaptureConfig.Parsed atomic = CaptureConfig.parse("overlay=off bogus=1", d);
         check(atomic.config == null && d.overlayEnabled, "atomic: nothing applied on error");
-        check(ok("text_color=green").describe().endsWith("text_color=green"), "green accepted");
+        check(ok("text_color=green").toMap().get("text_color").equals("green"), "green accepted");
         bad("text_color=red");
         Map<String, String> entries = new LinkedHashMap<>();
         entries.put("location", "Obs 1");
