@@ -29,12 +29,20 @@ public final class ConfigStoreTest {
         ConfigStore.Loaded l = store.load();
         check(l.fileState.equals("missing") && l.config.describe().equals(CaptureConfig.defaults().describe()) && !live.exists(), "missing file uses defaults");
 
+        check(store.update("fields=").config.fieldsString().equals("none")
+            && new ConfigStore(dir).load().config.fieldsString().equals("none"), "empty field selection persists");
+        check(store.update("fields=location,datetime,fps,frames").config.fieldsString().equals("location,datetime,fps")
+            && new ConfigStore(dir).load().config.fieldsString().equals("location,datetime,fps"),
+            "legacy persisted fields migrate without frame counter");
+
         // Update, persistence across a new store instance (service restart / app update keeps filesDir).
-        check(store.update("overlay=off target_fps=2 position=top-right").config != null, "update ok");
+        check(store.update("overlay=off target_fps=15.5 position=top-right").config != null, "fractional update ok");
         ConfigStore again = new ConfigStore(dir);
-        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps,frames target_fps=2.0 jpeg_size=auto text_color=green"), again.load().config.describe());
+        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps target_fps=15.5 jpeg_size=auto text_color=green"), again.load().config.describe());
+        check(store.update("target_fps=10").config != null
+            && new ConfigStore(dir).load().config.targetFpsString().equals("10.0"), "above-9 target persists across store instances");
         String saved = read(live);
-        check(saved.startsWith("#") && saved.contains("\ntarget_fps=2.0\n") && !new File(dir, "camera.properties.tmp").exists(), "readable commented file, no temp left");
+        check(saved.startsWith("#") && saved.contains("\ntarget_fps=10.0\n") && !new File(dir, "camera.properties.tmp").exists(), "readable commented file, no temp left");
 
         // Invalid update changes nothing.
         ConfigStore.Outcome bad = store.update("overlay=on text_size=5");
@@ -47,13 +55,14 @@ public final class ConfigStoreTest {
             new CameraCapabilities.JpegSize(1920, 1080, 0, 0)));
         java.util.Map<String, String> unsupported = new java.util.LinkedHashMap<>();
         unsupported.put("jpeg_size", "640x480");
-        unsupported.put("target_fps", "2");
+        unsupported.put("target_fps", "15.5");
         ConfigStore.Outcome rejectedCapability = capabilityStore.updateEntries(unsupported, caps::validate);
         check(rejectedCapability.config == null && !new File(capabilityDir, ConfigStore.FILE_NAME).exists(),
             "unsupported web-style update is atomic");
         unsupported.put("jpeg_size", "1280x720");
-        check(capabilityStore.updateEntries(unsupported, caps::validate).config == null
-            && !new File(capabilityDir, ConfigStore.FILE_NAME).exists(), "metadata cap rejects unsupported FPS without creating config");
+        check(capabilityStore.updateEntries(unsupported, caps::validate).config != null
+            && new ConfigStore(capabilityDir).load().config.targetFpsString().equals("15.5"),
+            "metadata estimate below target does not reject persisted configuration");
 
         // UTF-8 round trip (non-ASCII label written and read back as UTF-8, not platform charset).
         String label = "Obs\u00e9rvatoire \u5929\u6587";
@@ -74,7 +83,8 @@ public final class ConfigStoreTest {
 
         // Invalid imports: whole file rejected, live file untouched, import file removed.
         String before = read(live);
-        String[] badImports = {"location=ok\nbogus=1\n", "text_size=500\n", "target_fps=9\n", "jpeg_size=1280x0\n", "overlay=maybe\n", "fields=gps\n", "position=middle\n",
+        String[] badImports = {"location=ok\nbogus=1\n", "text_size=500\n", "target_fps=0\n", "target_fps=1.25\n",
+            "target_fps=922337203685477581\n", "jpeg_size=1280x0\n", "overlay=maybe\n", "fields=gps\n", "position=middle\n",
             "text_color=red\n", "location=a\\u00zz\n", "location=" + new String(new char[30]).replace('\0', 'x') + "\n"};
         for (String b : badImports) {
             write(imp, b);

@@ -5,9 +5,8 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
-/** Immutable Camera2 JPEG-output metadata and conservative application validation. */
+/** Immutable Camera2 JPEG-output metadata and independent JPEG size validation. */
 public final class CameraCapabilities {
-    public static final int APPLICATION_MAX_FPS_TENTHS = 30;
     public static final long MAX_JPEG_PIXELS = 8_000_000L;
     public static final int MAX_JPEG_BYTES = 16 * 1024 * 1024;
     private static final long DEFAULT_PIXELS = 1280L * 720L;
@@ -33,10 +32,10 @@ public final class CameraCapabilities {
             return minFrameDurationNanos + stallDurationNanos;
         }
         public boolean hasTimingEstimate() { return estimatedIntervalNanos() > 0; }
-        public int metadataEstimateFpsTenths() {
+        public long metadataEstimateFpsTenths() {
             long interval = estimatedIntervalNanos();
             if (interval <= 0) return 0;
-            return (int) Math.min(Integer.MAX_VALUE, 10_000_000_000L / interval);
+            return 10_000_000_000L / interval;
         }
     }
 
@@ -68,26 +67,15 @@ public final class CameraCapabilities {
         return nearest;
     }
 
-    public int applicationCapFpsTenths(CaptureConfig config) {
-        JpegSize selected = select(config);
-        if (selected == null || (long) selected.width * selected.height > MAX_JPEG_PIXELS) return 0;
-        int estimate = selected.metadataEstimateFpsTenths();
-        return !selected.hasTimingEstimate() ? APPLICATION_MAX_FPS_TENTHS
-            : Math.min(APPLICATION_MAX_FPS_TENTHS, estimate);
-    }
-
     public String validate(CaptureConfig config) {
         JpegSize selected = select(config);
         if (selected == null) return "unsupported-jpeg_size:" + config.jpegSize;
         if ((long) selected.width * selected.height > MAX_JPEG_PIXELS)
             return "unsupported-jpeg_size:application-limit-" + MAX_JPEG_PIXELS + "-pixels";
-        int cap = applicationCapFpsTenths(config);
-        if (config.targetFpsTenths > cap)
-            return "unsupported-target_fps:max-" + formatFps(cap) + "-for-" + selected.value();
         return null;
     }
 
-    public static String formatFps(int tenths) {
+    public static String formatFps(long tenths) {
         return String.format(java.util.Locale.ROOT, "%d.%d", tenths / 10, tenths % 10);
     }
 }

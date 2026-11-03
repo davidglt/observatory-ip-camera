@@ -74,6 +74,8 @@ expect() { # name expected_exit pattern -- args
 
 expect no-target 2 "No target" status
 [[ ! -s $FAKE_LOG ]] && echo "ok no adb call without target" || { echo "FAIL adb called without target"; fails=$((fails+1)); }
+help=$(bash "$C" --help)
+[[ $help == *"target_fps=positive FPS"* && $help != *"3.0"* ]] && echo "ok unrestricted target FPS help" || { echo "FAIL target FPS help: $help"; fails=$((fails+1)); }
 expect bad-target 2 "Invalid target" -s '-x' status
 expect unknown-arg 2 "Unknown argument" -s T bogus
 expect fetch-needs-out 2 "needs --out" -s T fetch
@@ -123,11 +125,11 @@ FAKE_LOGLINE="cmd=continuous-start result=failed reason=camera-permission-missin
 FAKE_LOGLINE="cmd=continuous-start result=failed reason=Camera error: 2" expect cstart-error 3 "Camera error" -s T --no-wake --timeout 5 continuous-start
 FAKE_LOGLINE="cmd=continuous-start result=deferred reason=activity-not-resumed" expect cstart-deferred 5 "never resumed" -s T --no-wake --timeout 2 continuous-start
 FAKE_CAM=false expect cstart-cam-denied 11 "CAMERA is not granted" -s T continuous-start
-FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=running frames=12 fps=0.98 target_fps=1.0 last_capture=2026-01-01T00:00:00+0000 tz=UTC age_ms=412" expect cstatus-running 0 "RUNNING.*measured" -s T --no-wake --timeout 5 continuous-status
-FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=running frames=0 fps=n/a target_fps=1.0 last_capture=none age_ms=none" expect cstatus-no-frame 0 "no recent frame" -s T --no-wake --timeout 5 continuous-status
-FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=running frames=5 fps=1.00 target_fps=1.0 last_capture=x tz=UTC age_ms=60000" expect cstatus-stale 0 "no recent frame" -s T --no-wake --timeout 5 continuous-status
-FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=stopped frames=3 fps=1.00 target_fps=1.0 last_capture=none age_ms=none" expect cstatus-stopped 4 "STOPPED" -s T --no-wake --timeout 5 continuous-status
-FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=error frames=0 fps=n/a target_fps=1.0 last_capture=none age_ms=none lastError=Camera disconnected." expect cstatus-error 3 "Camera disconnected" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=running frames=12 actual_fps=0.98 target_fps=1.0 last_capture=2026-01-01T00:00:00+0000 tz=UTC age_ms=412" expect cstatus-running 0 "RUNNING.*actual_fps.*target_fps" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=running frames=0 actual_fps=n/a target_fps=1.0 last_capture=none age_ms=none" expect cstatus-no-frame 0 "no recent frame" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=running frames=5 actual_fps=1.00 target_fps=1.0 last_capture=x tz=UTC age_ms=60000" expect cstatus-stale 0 "no recent frame" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=stopped frames=3 actual_fps=1.00 target_fps=1.0 last_capture=none age_ms=none" expect cstatus-stopped 4 "STOPPED" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=error frames=0 actual_fps=n/a target_fps=1.0 last_capture=none age_ms=none lastError=Camera disconnected." expect cstatus-error 3 "Camera disconnected" -s T --no-wake --timeout 5 continuous-status
 FAKE_LOGLINE="cmd=continuous-stop result=stop-requested state=running" expect cstop-timeout 5 "still active|Timeout" -s T --no-wake --timeout 2 continuous-stop
 FAKE_LOGLINE="cmd=capture result=failed reason=camera-busy owner=continuous" expect capture-busy 7 "owned by another mode" -s T --no-wake --timeout 5 capture
 # Regression: snapshot stat queries (and capture paths that use them) must never consume stdin.
@@ -142,9 +144,11 @@ run_case "$ADB" -s T shell frobnicate >/dev/null 2>&1; [[ $? -eq 97 && -e $FAKE_
 rm -f "$FAKE_LOG.bad"
 # The deadline itself must work and clean up its children.
 CASE_TIMEOUT=2 run_case sleep 30; [[ $? -eq 124 ]] && echo "ok per-case deadline fires" || { echo "FAIL deadline"; fails=$((fails+1)); }
-FAKE_LOGLINE="cmd=config-show result=config overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps,frames target_fps=1.0" expect config-show 0 "location=NYX" -s T --no-wake --timeout 5 config-show
+FAKE_LOGLINE="cmd=config-show result=config overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps target_fps=1.0" expect config-show 0 "location=NYX" -s T --no-wake --timeout 5 config-show
 FAKE_LOGLINE="cmd=config-set result=config overlay=off applied=next-frame" expect config-set 0 "overlay=off" -s T --no-wake --timeout 5 config-set overlay=off
 grep -q -- "--es config 'overlay=off'" "$FAKE_LOG" && echo "ok config passed single-quoted" || { echo "FAIL config quoting"; fails=$((fails+1)); }
+FAKE_LOGLINE="cmd=config-set result=config fields=none applied=next-frame" expect config-set-no-fields 0 "fields=none" -s T --no-wake --timeout 5 config-set fields=
+grep -q -- "--es config 'fields='" "$FAKE_LOG" && echo "ok empty field selection passed" || { echo "FAIL empty field selection quoting"; fails=$((fails+1)); }
 FAKE_LOGLINE="cmd=config-set result=failed reason=invalid-config:invalid-text_size:expected-10-96" expect config-set-rejected 2 "nothing changed" -s T --no-wake --timeout 5 config-set text_size=5
 FAKE_LOGLINE="cmd=config-reset result=config overlay=on applied=next-frame" expect config-reset 0 "overlay=on" -s T --no-wake --timeout 5 config-reset
 printf 'overlay=on\nlocation=NYX\n' > "$T/export"

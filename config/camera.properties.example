@@ -22,8 +22,9 @@ position=bottom-left
 # Text size 10-96, defined for a 720 px short image side and scaled to the image. Default: 24
 text_size=24
 
-# Comma-separated visible fields: location, datetime, fps, frames. Default: all four
-fields=location,datetime,fps,frames
+# Comma-separated visible fields: location, datetime, fps. Use none for no text.
+# Legacy frames entries are accepted but ignored. Default: all three
+fields=location,datetime,fps
 
 # JPEG output size: auto preserves the previous nearest-to-1280x720 selection,
 # or choose an exact size advertised by the selected camera, e.g. 1920x1080.
@@ -31,10 +32,10 @@ fields=location,datetime,fps,frames
 # Default: auto
 jpeg_size=auto
 
-# Capture target in frames per second, 0.1-3.0 with one decimal. Default: 1.0
-# 3 FPS is the conservative application limit; selected-camera metadata may
-# impose a lower validation limit. Neither is a throughput guarantee; check
-# measured FPS and processing costs.
+# Positive capture target in frames per second with at most one decimal digit.
+# Default: 1.0. Camera timing metadata is an informational estimate only;
+# actual FPS may be lower when the camera or processing cannot keep up.
+# The stored 64-bit tenths representation supports up to 922337203685477580.7.
 target_fps=1.0
 
 # Text colour. Only green (with black outline and shadow) is supported. Default: green

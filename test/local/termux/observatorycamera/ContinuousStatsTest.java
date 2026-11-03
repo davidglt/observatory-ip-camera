@@ -27,7 +27,7 @@ public final class ContinuousStatsTest {
 
         ContinuousStatus st = new ContinuousStatus("running", 30, 1.0, 10, 0, 30 * S, 1_767_225_600_000L, "UTC", 200_000_000L, 190_000_000L, 300_000_000L, 12345, "rendered", 1, 1, null);
         String d = st.describe(32 * S);
-        check(d.contains("state=running frames=30 fps=1.00 target_fps=1.0") && d.contains("last_capture=2026-01-01T00:00:00+0000 tz=UTC age_ms=2000")
+        check(d.contains("state=running frames=30 actual_fps=1.00 target_fps=1.0") && d.contains("last_capture=2026-01-01T00:00:00+0000 tz=UTC age_ms=2000")
             && d.contains("proc_avg_ms=190") && d.contains("overlay_mode=rendered") && !d.contains("lastError"), d);
         check(ContinuousStatus.stopped().describe(5 * S).contains("last_capture=none age_ms=none") && ContinuousStatus.stopped().describe(0).contains("state=stopped"), "stopped never shows a capture");
         check(st.withState("error", "boom").describe(32 * S).endsWith("lastError=boom") && !st.withState("stopped", null).isActive(), "state change");

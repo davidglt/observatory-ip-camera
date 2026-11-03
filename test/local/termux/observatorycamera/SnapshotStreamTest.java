@@ -165,6 +165,17 @@ public final class SnapshotStreamTest {
             check(page.contains("200 OK") && page.contains("text/html") && page.contains("src=\"/stream.mjpg\""), "viewer page");
             check(page.contains("Settings") && page.contains("Authorization") && page.contains("<script nonce=")
                 && !page.contains("localStorage") && !page.contains("sessionStorage"), "viewer has in-memory authenticated settings only");
+            check(page.contains("grid-template-columns:repeat(2,minmax(0,1fr))")
+                && page.contains("@media(max-width:600px)") && page.contains("grid-template-columns:minmax(0,1fr)"),
+                "settings grid adapts to narrow screens");
+            check(page.contains("name=\"visible_field\" value=\"location\"")
+                && page.contains("name=\"visible_field\" value=\"datetime\"")
+                && page.contains("name=\"visible_field\" value=\"fps\"")
+                && !page.contains("type=\"checkbox\" name=\"visible_field\" value=\"frames\""),
+                "visible fields have three labeled checkboxes only");
+            check(page.contains("result.textContent='Saved.'") && !page.contains("Saved atomically.")
+                && page.contains("p.set('fields',visible.length?visible.join(','):'none')"),
+                "save acknowledges briefly and explicitly supports no fields");
             check(page.indexOf("id=\"settings-button\"") < page.indexOf("<img src=\"/stream.mjpg\"")
                 && !page.contains("src=\"http") && !page.contains("https://"), "settings button is outside pixels and assets are self-contained");
             check(status(readAll(open(port, "POST", "/stream.mjpg"))).contains("405"), "POST stream rejected");

@@ -43,7 +43,7 @@ final class FrameOverlay {
 
     private FrameOverlay() {}
 
-    static Result process(byte[] jpeg, CaptureConfig config, double fps, int frameNumber, long wallMillis, TimeZone zone) throws IOException {
+    static Result process(byte[] jpeg, CaptureConfig config, double actualFps, long wallMillis, TimeZone zone) throws IOException {
         long start = System.nanoTime();
         if (!config.overlayEnabled) return new Result(jpeg, false, 0, 0, 1, System.nanoTime() - start);
         Bitmap decoded = null;
@@ -57,7 +57,7 @@ final class FrameOverlay {
             if (decoded == null) throw new IOException("JPEG decode failed.");
             upright = normalize(decoded, tag);
             if (upright != decoded) { decoded.recycle(); decoded = null; }
-            draw(upright, OverlayFormat.lines(config, fps, frameNumber, wallMillis, zone), config);
+            draw(upright, OverlayFormat.lines(config, actualFps, wallMillis, zone), config);
             ByteArrayOutputStream out = new ByteArrayOutputStream(jpeg.length + 4096);
             if (!upright.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)) throw new IOException("JPEG encode failed.");
             return new Result(out.toByteArray(), true, upright.getWidth(), upright.getHeight(), tag, System.nanoTime() - start);
