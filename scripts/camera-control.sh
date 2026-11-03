@@ -10,6 +10,7 @@ TIMEOUT=20
 WAKE=1
 FORCE=0
 OUT=
+IN=
 LINES=60
 CONFIG=
 TARGET="${TARGET:-}"
@@ -34,6 +35,9 @@ Subcommands:
   config-set K=V ... validate and save settings atomically (overlay=on|off location=NAME position=bottom-left|bottom-right|top-left|top-right
                      text_size=10-96 fields=location,datetime,fps,frames target_fps=0.1-2.0); applied from the next frame
   config-reset       restore default settings
+  config-export --out FILE   save the live camera.properties (normalized) to FILE on this host
+  config-import --in FILE    upload FILE, validate it completely on the device, then replace the live settings
+                     (invalid file: nothing changes, exit 2 with the reason). Applied from the next frame.
   setup-permissions  grant CAMERA and POST_NOTIFICATIONS via 'pm grant' (only when you run it)
 
 Options: --timeout SECONDS (default 20), --no-wake, --force (fetch overwrite), --out FILE, --lines N
@@ -50,12 +54,13 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -s|--target) [[ $# -ge 2 ]] || die $EX_USAGE "$1 needs a value"; TARGET=$2; shift 2 ;;
         --timeout) [[ $# -ge 2 ]] || die $EX_USAGE "--timeout needs a value"; TIMEOUT=$2; shift 2 ;;
+        --in) [[ $# -ge 2 ]] || die $EX_USAGE "--in needs a value"; IN=$2; shift 2 ;;
         --out) [[ $# -ge 2 ]] || die $EX_USAGE "--out needs a value"; OUT=$2; shift 2 ;;
         --lines) [[ $# -ge 2 ]] || die $EX_USAGE "--lines needs a value"; LINES=$2; shift 2 ;;
         --no-wake) WAKE=0; shift ;;
         --force) FORCE=1; shift ;;
         -h|--help|help) usage; exit 0 ;;
-        start|stop|status|capture|fetch|logs|setup-permissions|continuous-start|continuous-stop|continuous-status|config-show|config-set|config-reset)
+        start|stop|status|capture|fetch|logs|setup-permissions|continuous-start|continuous-stop|continuous-status|config-show|config-set|config-reset|config-export|config-import)
             [[ -z $SUB ]] || die $EX_USAGE "Only one subcommand allowed."; SUB=$1; shift ;;
         *=*)
             [[ $SUB == config-set ]] || die $EX_USAGE "Unexpected assignment '$1' (only valid after config-set)."
@@ -71,6 +76,12 @@ done
 [[ $LINES =~ ^[0-9]+$ ]] || die $EX_USAGE "--lines must be a number."
 [[ $APP_PORT =~ ^[0-9]+$ ]] || die $EX_USAGE "APP_PORT must be a number."
 case $SUB in fetch) [[ -n $OUT ]] || die $EX_USAGE "fetch needs --out FILE." ;; esac
+[[ $SUB != config-export || -n $OUT ]] || die $EX_USAGE "config-export needs --out FILE."
+if [[ $SUB == config-import ]]; then
+    [[ -n $IN ]] || die $EX_USAGE "config-import needs --in FILE."
+    [[ -f $IN && -r $IN ]] || die $EX_USAGE "Cannot read $IN."
+    (( $(wc -c < "$IN") <= 8192 )) || die $EX_USAGE "$IN is larger than 8192 bytes."
+fi
 if [[ $SUB == config-set ]]; then
     [[ -n $CONFIG ]] || die $EX_USAGE "config-set needs at least one KEY=VALUE."
     (( ${#CONFIG} <= 200 )) || die $EX_USAGE "config-set assignments are too long."
@@ -348,6 +359,32 @@ cmd_config() { # config-show | config-set | config-reset
     echo "Config: ${line#*result=config }"
 }
 
+cmd_config_export() {
+    local id line tmp
+    [[ ! -e $OUT || $FORCE -eq 1 ]] || die $EX_USAGE "$OUT exists; use --force to overwrite."
+    id=$(new_id)
+    send_control config-export "$id"
+    line=$(wait_control "$id" config-export 'result=(config|failed)') || die $EX_TIMEOUT "Timeout waiting for the export."
+    grep -q 'result=failed' <<<"$line" && die $EX_FAIL "Export failed: ${line#*reason=}"
+    tmp=$(mktemp "${OUT}.XXXXXX") || die $EX_USAGE "Cannot create temporary file next to $OUT."
+    if ! adbt exec-out run-as "$PKG" cat files/camera.properties > "$tmp" 2>/dev/null || [[ ! -s $tmp ]]; then
+        rm -f "$tmp"; die $EX_FAIL "camera.properties could not be read."
+    fi
+    mv "$tmp" "$OUT"
+    echo "Exported $(wc -c < "$OUT") bytes to $OUT"
+}
+
+cmd_config_import() {
+    local id line
+    # Stage the file in app-private storage (debuggable APK, run-as); the app validates it entirely before use.
+    adbt shell "run-as $PKG sh -c 'cat > files/camera.import'" < "$IN" || die $EX_DEVICE "Could not upload $IN to the app-private import slot."
+    id=$(new_id)
+    send_control config-import "$id"
+    line=$(wait_control "$id" config-import 'result=(config|failed)') || die $EX_TIMEOUT "Timeout waiting for the import result."
+    grep -q 'result=failed' <<<"$line" && die $EX_USAGE "Import rejected, previous configuration kept: ${line#*reason=}"
+    echo "Imported: ${line#*result=config }"
+}
+
 cmd_logs() {
     echo "== permissions =="
     echo "CAMERA: $(perm_state android.permission.CAMERA)"
@@ -386,4 +423,6 @@ case $SUB in
     continuous-stop) cmd_continuous_stop ;;
     continuous-status) cmd_continuous_status ;;
     config-show|config-set|config-reset) cmd_config ;;
+    config-export) cmd_config_export ;;
+    config-import) cmd_config_import ;;
 esac

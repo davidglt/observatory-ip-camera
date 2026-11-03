@@ -20,6 +20,9 @@ public final class CaptureConfig {
     public static final String TEXT_SIZE = "text_size";
     public static final String FIELDS = "fields";
     public static final String TARGET_FPS = "target_fps";
+    public static final String TEXT_COLOR = "text_color";
+    public static final String TEXT_COLOR_GREEN = "green";
+    public static final int MAX_LOCATION_LENGTH = 24;
 
     public static final int FIELD_LOCATION = 1;
     public static final int FIELD_DATETIME = 2;
@@ -33,7 +36,7 @@ public final class CaptureConfig {
     public static final int MIN_FPS_TENTHS = 1;
     public static final int MAX_FPS_TENTHS = 20;
     public static final int MAX_ASSIGNMENTS_LENGTH = 200;
-    private static final Pattern LOCATION_PATTERN = Pattern.compile("[A-Za-z0-9_.-]{1,24}");
+    private static final Pattern LOCATION_PATTERN = Pattern.compile("[\\p{L}\\p{N}_.-]([\\p{L}\\p{N} _.-]*[\\p{L}\\p{N}_.-])?");
     private static final Pattern FPS_PATTERN = Pattern.compile("[0-9](\\.[0-9])?");
     private static final String[] FIELD_NAMES = {"location", "datetime", "fps", "frames"};
 
@@ -65,71 +68,94 @@ public final class CaptureConfig {
         Parsed(CaptureConfig config, String error) { this.config = config; this.error = error; }
     }
 
+    /** Mutable working copy used while validating assignments; never exposed. */
+    private static final class Draft {
+        boolean overlay;
+        String location;
+        String position;
+        int textSize;
+        int fields;
+        int fps;
+        Draft(CaptureConfig c) {
+            overlay = c.overlayEnabled; location = c.location; position = c.position;
+            textSize = c.textSize; fields = c.fields; fps = c.targetFpsTenths;
+        }
+        CaptureConfig build() { return new CaptureConfig(overlay, location, position, textSize, fields, fps); }
+    }
+
+    /** Validates one key/value into draft; returns null when valid, otherwise an actionable error. */
+    private static String apply(Draft d, String key, String value) {
+        switch (key) {
+            case OVERLAY:
+                if (value.equals("on")) d.overlay = true;
+                else if (value.equals("off")) d.overlay = false;
+                else return "invalid-overlay:expected-on-or-off";
+                return null;
+            case LOCATION:
+                if (value.length() > MAX_LOCATION_LENGTH || !LOCATION_PATTERN.matcher(value).matches())
+                    return "invalid-location:1-" + MAX_LOCATION_LENGTH + "-letters-digits-space-_.-(no-leading-or-trailing-space)";
+                d.location = value;
+                return null;
+            case POSITION:
+                if (!contains(POSITIONS, value)) return "invalid-position:expected-" + String.join("|", POSITIONS);
+                d.position = value;
+                return null;
+            case TEXT_SIZE: {
+                int n = parseInt(value);
+                if (n < MIN_TEXT_SIZE || n > MAX_TEXT_SIZE) return "invalid-text_size:expected-" + MIN_TEXT_SIZE + "-" + MAX_TEXT_SIZE;
+                d.textSize = n;
+                return null;
+            }
+            case FIELDS: {
+                int mask = parseFields(value);
+                if (mask == 0) return "invalid-fields:expected-comma-list-of-" + String.join(",", FIELD_NAMES);
+                d.fields = mask;
+                return null;
+            }
+            case TARGET_FPS: {
+                int tenths = parseFpsTenths(value);
+                if (tenths < MIN_FPS_TENTHS || tenths > MAX_FPS_TENTHS) return "invalid-target_fps:expected-0.1-to-2.0";
+                d.fps = tenths;
+                return null;
+            }
+            case TEXT_COLOR:
+                return value.equals(TEXT_COLOR_GREEN) ? null : "invalid-text_color:only-green-is-supported";
+            default:
+                return "unknown-key:" + safe(key);
+        }
+    }
+
     /** Applies whitespace-separated key=value assignments on top of base. Unknown keys, duplicates and out-of-range values are rejected. */
     public static Parsed parse(String assignments, CaptureConfig base) {
         if (assignments == null || assignments.trim().isEmpty()) return new Parsed(null, "no-assignments");
         if (assignments.length() > MAX_ASSIGNMENTS_LENGTH) return new Parsed(null, "assignments-too-long");
-        boolean overlay = base.overlayEnabled;
-        String location = base.location;
-        String position = base.position;
-        int textSize = base.textSize;
-        int fields = base.fields;
-        int fps = base.targetFpsTenths;
+        Draft draft = new Draft(base);
         Set<String> seen = new HashSet<>();
         for (String part : assignments.trim().split("\\s+")) {
             int eq = part.indexOf('=');
             if (eq <= 0 || eq == part.length() - 1) return new Parsed(null, "malformed-assignment:" + safe(part));
             String key = part.substring(0, eq);
-            String value = part.substring(eq + 1);
             if (!seen.add(key)) return new Parsed(null, "duplicate-key:" + safe(key));
-            switch (key) {
-                case OVERLAY:
-                    if (value.equals("on")) overlay = true;
-                    else if (value.equals("off")) overlay = false;
-                    else return new Parsed(null, "invalid-overlay:expected-on-or-off");
-                    break;
-                case LOCATION:
-                    if (!LOCATION_PATTERN.matcher(value).matches()) return new Parsed(null, "invalid-location:1-24-chars-of-A-Za-z0-9_.-");
-                    location = value;
-                    break;
-                case POSITION:
-                    if (!contains(POSITIONS, value)) return new Parsed(null, "invalid-position:expected-" + String.join("|", POSITIONS));
-                    position = value;
-                    break;
-                case TEXT_SIZE: {
-                    int n = parseInt(value);
-                    if (n < MIN_TEXT_SIZE || n > MAX_TEXT_SIZE) return new Parsed(null, "invalid-text_size:expected-" + MIN_TEXT_SIZE + "-" + MAX_TEXT_SIZE);
-                    textSize = n;
-                    break;
-                }
-                case FIELDS: {
-                    int mask = parseFields(value);
-                    if (mask == 0) return new Parsed(null, "invalid-fields:expected-comma-list-of-" + String.join(",", FIELD_NAMES));
-                    fields = mask;
-                    break;
-                }
-                case TARGET_FPS: {
-                    int tenths = parseFpsTenths(value);
-                    if (tenths < MIN_FPS_TENTHS || tenths > MAX_FPS_TENTHS) return new Parsed(null, "invalid-target_fps:expected-0.1-to-2.0");
-                    fps = tenths;
-                    break;
-                }
-                default:
-                    return new Parsed(null, "unknown-key:" + safe(key));
-            }
+            String error = apply(draft, key, part.substring(eq + 1));
+            if (error != null) return new Parsed(null, error);
         }
-        return new Parsed(new CaptureConfig(overlay, location, position, textSize, fields, fps), null);
+        return new Parsed(draft.build(), null);
     }
 
-    /** Rebuilds a config from persisted values; any missing or invalid value falls back to its default. */
-    public static CaptureConfig fromMap(Map<String, String> map) {
-        CaptureConfig result = defaults();
-        for (Map.Entry<String, String> e : map.entrySet()) {
-            if (e.getValue() == null) continue;
-            Parsed p = parse(e.getKey() + "=" + e.getValue(), result);
-            if (p.config != null) result = p.config;
+    /**
+     * Validates a whole key/value set (a parsed properties file) on top of the defaults. Missing keys keep
+     * their defaults; unknown keys, bad values and oversized sets are rejected as a whole.
+     */
+    public static Parsed fromEntries(Map<String, String> entries) {
+        if (entries.size() > 16) return new Parsed(null, "too-many-keys");
+        Draft draft = new Draft(defaults());
+        for (Map.Entry<String, String> e : entries.entrySet()) {
+            String value = e.getValue();
+            if (value == null || value.length() > 64) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
+            String error = apply(draft, e.getKey(), value);
+            if (error != null) return new Parsed(null, error);
         }
-        return result;
+        return new Parsed(draft.build(), null);
     }
 
     public java.util.Map<String, String> toMap() {
@@ -140,6 +166,7 @@ public final class CaptureConfig {
         m.put(TEXT_SIZE, Integer.toString(textSize));
         m.put(FIELDS, fieldsString());
         m.put(TARGET_FPS, targetFpsString());
+        m.put(TEXT_COLOR, TEXT_COLOR_GREEN);
         return m;
     }
 

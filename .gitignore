@@ -2,3 +2,4 @@
 /dist/
 *.keystore
 *.p12
+camera.properties

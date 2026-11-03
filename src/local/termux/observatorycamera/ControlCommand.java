@@ -19,6 +19,8 @@ public final class ControlCommand {
     public static final String CONFIG_SHOW = "config-show";
     public static final String CONFIG_SET = "config-set";
     public static final String CONFIG_RESET = "config-reset";
+    public static final String CONFIG_EXPORT = "config-export";
+    public static final String CONFIG_IMPORT = "config-import";
     public static final String EXTRA_CONFIG = "config";
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_-]{1,40}");
 
@@ -35,7 +37,8 @@ public final class ControlCommand {
 
     private static boolean known(String c) {
         return c.equals(START) || c.equals(STOP) || c.equals(STATUS) || c.equals(CONTINUOUS_START) || c.equals(CONTINUOUS_STOP)
-            || c.equals(CONTINUOUS_STATUS) || c.equals(CONFIG_SHOW) || c.equals(CONFIG_SET) || c.equals(CONFIG_RESET);
+            || c.equals(CONTINUOUS_STATUS) || c.equals(CONFIG_SHOW) || c.equals(CONFIG_SET) || c.equals(CONFIG_RESET)
+            || c.equals(CONFIG_EXPORT) || c.equals(CONFIG_IMPORT);
     }
 
     /** Commands that start the camera service and therefore need a resumed activity. */

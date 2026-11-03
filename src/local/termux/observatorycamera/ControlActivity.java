@@ -89,6 +89,8 @@ public final class ControlActivity extends Activity {
             case ControlCommand.CONFIG_SHOW: configShow(command); break;
             case ControlCommand.CONFIG_SET: configSet(command); break;
             case ControlCommand.CONFIG_RESET: configReset(command); break;
+            case ControlCommand.CONFIG_EXPORT: configOutcome(command, CaptureSettings.store(this).materialize()); break;
+            case ControlCommand.CONFIG_IMPORT: configOutcome(command, CaptureSettings.store(this).importPending()); break;
             default: status(command);
         }
         if (awaiting == null) finish();
@@ -165,22 +167,22 @@ public final class ControlActivity extends Activity {
     }
 
     private void configShow(ControlCommand command) {
-        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", CaptureSettings.load(this).describe()));
+        ConfigStore.Loaded loaded = CaptureSettings.store(this).load();
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", loaded.config.describe()
+            + " file=" + loaded.fileState + (loaded.error == null ? "" : " fileError=" + loaded.error)));
     }
 
-    private void configSet(ControlCommand command) {
-        CaptureConfig.Parsed parsed = CaptureConfig.parse(command.config, CaptureSettings.load(this));
-        if (parsed.config == null) {
-            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=invalid-config:" + parsed.error));
+    private void configSet(ControlCommand command) { configOutcome(command, CaptureSettings.store(this).update(command.config)); }
+
+    private void configReset(ControlCommand command) { configOutcome(command, CaptureSettings.store(this).reset()); }
+
+    /** Logs the saved configuration, or the rejection (the previous configuration is then unchanged). */
+    private void configOutcome(ControlCommand command, ConfigStore.Outcome outcome) {
+        if (outcome.config == null) {
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=" + outcome.error));
             return;
         }
-        CaptureSettings.save(this, parsed.config);
-        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", parsed.config.describe() + " applied=next-frame"));
-    }
-
-    private void configReset(ControlCommand command) {
-        CaptureSettings.save(this, CaptureConfig.defaults());
-        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", CaptureConfig.defaults().describe() + " applied=next-frame"));
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", outcome.config.describe() + " applied=next-frame"));
     }
 
     private String notificationState() {

@@ -15,11 +15,13 @@ S=$(cat "$FAKE_STATE" 2>/dev/null || echo ok)
 case "$1" in
     get-state) [[ $S == offline ]] && echo offline || echo device ;;
     forward) [[ $2 == --remove ]] || echo "$FAKE_PORT" ;;
+    exec-out) cat "$FAKE_EXPORT" 2>/dev/null ;;
     logcat) cat "$FAKE_LOGCAT" 2>/dev/null ;;
     shell)
         case "$2 $3" in
             "pm path") [[ $S == noapp ]] || echo "package:/data/app/x.apk" ;;
             "dumpsys package") echo "      android.permission.POST_NOTIFICATIONS: granted=${FAKE_NOTIF:-true}"; echo "      android.permission.CAMERA: granted=${FAKE_CAM:-true}" ;;
+            "run-as"*) cat > "$FAKE_UPLOAD" ;;
             "getprop ro.build.version.sdk") echo 33 ;;
             "am start") shift 3; ID=$(sed -n 's/.*--es request_id \([^ ]*\).*/\1/p' <<<"$*"); [[ -n ${FAKE_LOGLINE:-} ]] && echo "01-01 I/ObservatoryControl( 1): CONTROL id=$ID $FAKE_LOGLINE" >> "$FAKE_LOGCAT"; echo "Status: ok" ;;
         esac ;;
@@ -27,7 +29,7 @@ esac
 exit 0
 FAKE
 chmod +x "$T/adb"
-export ADB="$T/adb" FAKE_LOGCAT="$T/logcat"
+export ADB="$T/adb" FAKE_LOGCAT="$T/logcat" FAKE_EXPORT="$T/export" FAKE_UPLOAD="$T/upload"
 unset TARGET
 C=scripts/camera-control.sh
 fails=0
@@ -103,6 +105,19 @@ FAKE_LOGLINE="cmd=config-set result=config overlay=off applied=next-frame" expec
 grep -q -- "--es config 'overlay=off'" "$FAKE_LOG" && echo "ok config passed single-quoted" || { echo "FAIL config quoting"; fails=$((fails+1)); }
 FAKE_LOGLINE="cmd=config-set result=failed reason=invalid-config:invalid-text_size:expected-10-96" expect config-set-rejected 2 "nothing changed" -s T --no-wake --timeout 5 config-set text_size=5
 FAKE_LOGLINE="cmd=config-reset result=config overlay=on applied=next-frame" expect config-reset 0 "overlay=on" -s T --no-wake --timeout 5 config-reset
+printf 'overlay=on\nlocation=NYX\n' > "$T/export"
+FAKE_LOGLINE="cmd=config-export result=config overlay=on" expect config-export 0 "Exported" -s T --no-wake --timeout 5 config-export --out "$T/out.properties"
+cmp -s "$T/export" "$T/out.properties" && echo "ok exported bytes" || { echo "FAIL export bytes"; fails=$((fails+1)); }
+expect config-export-exists 2 "exists" -s T --no-wake config-export --out "$T/out.properties"
+expect config-export-needs-out 2 "needs --out" -s T config-export
+printf 'location=NYX\n' > "$T/in.properties"
+FAKE_LOGLINE="cmd=config-import result=config overlay=on applied=next-frame" expect config-import 0 "Imported" -s T --no-wake --timeout 5 config-import --in "$T/in.properties"
+cmp -s "$T/in.properties" "$T/upload" && echo "ok uploaded bytes" || { echo "FAIL upload bytes"; fails=$((fails+1)); }
+FAKE_LOGLINE="cmd=config-import result=failed reason=invalid-import:unknown-key:x" expect config-import-rejected 2 "previous configuration kept" -s T --no-wake --timeout 5 config-import --in "$T/in.properties"
+expect config-import-missing 2 "Cannot read" -s T config-import --in "$T/none"
+expect config-import-needs-in 2 "needs --in" -s T config-import
+head -c 9000 /dev/zero > "$T/big"
+expect config-import-big 2 "larger than" -s T config-import --in "$T/big"
 n=$(wc -l < "$FAKE_LOG")
 expect config-injection 2 "Invalid assignment" -s T config-set 'overlay=on;reboot'
 expect config-injection-sub 2 "Invalid assignment" -s T config-set 'location=$(id)'

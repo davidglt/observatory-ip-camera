@@ -1,0 +1,33 @@
+# Observatory IP Camera configuration example (java.util.Properties format, UTF-8).
+#
+# The live file is files/camera.properties in the app-private storage of
+# local.termux.observatorycamera. Never commit the live file. Use:
+#   camera-control.sh -s "$TARGET" config-export --out camera.properties
+#   camera-control.sh -s "$TARGET" config-import --in camera.properties
+#
+# Every key is optional; a missing key uses the default shown. Unknown keys and
+# invalid values reject the whole import and keep the previous configuration.
+# The file may be at most 8192 bytes and must be valid UTF-8.
+
+# Burn the overlay into the JPEG pixels: on | off. Default: on
+overlay=on
+
+# Text label for the location (not GPS). 1-24 characters: letters, digits,
+# spaces inside, underscore, dot, hyphen. Default: NYX
+location=NYX
+
+# bottom-left | bottom-right | top-left | top-right. Default: bottom-left
+position=bottom-left
+
+# Text size 10-96, defined for a 720 px short image side and scaled to the image. Default: 24
+text_size=24
+
+# Comma-separated visible fields: location, datetime, fps, frames. Default: all four
+fields=location,datetime,fps,frames
+
+# Capture target in frames per second, 0.1-2.0 with one decimal. Default: 1.0
+# This is a ceiling; the measured FPS is reported by continuous-status.
+target_fps=1.0
+
+# Text colour. Only green (with black outline and shadow) is supported. Default: green
+text_color=green
