@@ -24,6 +24,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.ByteBuffer;
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.TimeZone;
 
 public final class MainActivity extends Activity {
@@ -268,11 +269,15 @@ public final class MainActivity extends Activity {
             StreamConfigurationMap map = info.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             Size[] sizes = map == null ? null : map.getOutputSizes(ImageFormat.JPEG);
             if (sizes == null || sizes.length == 0) throw new IllegalStateException("JPEG capture unavailable.");
-            Size size = sizes[0];
-            long target = 1280L * 720L;
-            for (Size candidate : sizes) {
-                if (Math.abs((long) candidate.getWidth() * candidate.getHeight() - target) < Math.abs((long) size.getWidth() * size.getHeight() - target)) size = candidate;
-            }
+            ArrayList<CameraCapabilities.JpegSize> jpegSizes = new ArrayList<>();
+            for (Size candidate : sizes) jpegSizes.add(new CameraCapabilities.JpegSize(candidate.getWidth(), candidate.getHeight(),
+                map.getOutputMinFrameDuration(ImageFormat.JPEG, candidate), map.getOutputStallDuration(ImageFormat.JPEG, candidate)));
+            CameraCapabilities capabilities = new CameraCapabilities(jpegSizes);
+            CaptureConfig captureConfig = CaptureSettings.load(this);
+            String invalid = capabilities.validate(captureConfig);
+            if (invalid != null) throw new IllegalArgumentException(invalid);
+            CameraCapabilities.JpegSize selectedSize = capabilities.select(captureConfig);
+            Size size = new Size(selectedSize.width, selectedSize.height);
             reader = ImageReader.newInstance(size.getWidth(), size.getHeight(), ImageFormat.JPEG, 2);
             worker = new HandlerThread("single-capture");
             worker.start();

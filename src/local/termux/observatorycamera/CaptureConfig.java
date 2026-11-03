@@ -20,6 +20,7 @@ public final class CaptureConfig {
     public static final String TEXT_SIZE = "text_size";
     public static final String FIELDS = "fields";
     public static final String TARGET_FPS = "target_fps";
+    public static final String JPEG_SIZE = "jpeg_size";
     public static final String TEXT_COLOR = "text_color";
     public static final String TEXT_COLOR_GREEN = "green";
     public static final int MAX_LOCATION_LENGTH = 24;
@@ -34,10 +35,11 @@ public final class CaptureConfig {
     public static final int MIN_TEXT_SIZE = 10;
     public static final int MAX_TEXT_SIZE = 96;
     public static final int MIN_FPS_TENTHS = 1;
-    public static final int MAX_FPS_TENTHS = 20;
+    public static final int MAX_FPS_TENTHS = 50;
     public static final int MAX_ASSIGNMENTS_LENGTH = 200;
     private static final Pattern LOCATION_PATTERN = Pattern.compile("[\\p{L}\\p{N}_.-]([\\p{L}\\p{N} _.-]*[\\p{L}\\p{N}_.-])?");
     private static final Pattern FPS_PATTERN = Pattern.compile("[0-9](\\.[0-9])?");
+    private static final Pattern JPEG_SIZE_PATTERN = Pattern.compile("[1-9][0-9]{0,4}x[1-9][0-9]{0,4}");
     private static final String[] FIELD_NAMES = {"location", "datetime", "fps", "frames"};
 
     public final boolean overlayEnabled;
@@ -46,19 +48,21 @@ public final class CaptureConfig {
     public final int textSize;
     public final int fields;
     public final int targetFpsTenths;
+    public final String jpegSize;
 
-    private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields, int targetFpsTenths) {
+    private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields, int targetFpsTenths, String jpegSize) {
         this.overlayEnabled = overlayEnabled;
         this.location = location;
         this.position = position;
         this.textSize = textSize;
         this.fields = fields;
         this.targetFpsTenths = targetFpsTenths;
+        this.jpegSize = jpegSize;
     }
 
     /** Conservative defaults: overlay on, NYX, bottom-left, size 24 (at 720 px short side), all fields, 1.0 FPS target. */
     public static CaptureConfig defaults() {
-        return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10);
+        return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10, "auto");
     }
 
     /** Result of parsing: exactly one of config and error is non-null. */
@@ -76,11 +80,12 @@ public final class CaptureConfig {
         int textSize;
         int fields;
         int fps;
+        String jpegSize;
         Draft(CaptureConfig c) {
             overlay = c.overlayEnabled; location = c.location; position = c.position;
-            textSize = c.textSize; fields = c.fields; fps = c.targetFpsTenths;
+            textSize = c.textSize; fields = c.fields; fps = c.targetFpsTenths; jpegSize = c.jpegSize;
         }
-        CaptureConfig build() { return new CaptureConfig(overlay, location, position, textSize, fields, fps); }
+        CaptureConfig build() { return new CaptureConfig(overlay, location, position, textSize, fields, fps, jpegSize); }
     }
 
     /** Validates one key/value into draft; returns null when valid, otherwise an actionable error. */
@@ -114,10 +119,15 @@ public final class CaptureConfig {
             }
             case TARGET_FPS: {
                 int tenths = parseFpsTenths(value);
-                if (tenths < MIN_FPS_TENTHS || tenths > MAX_FPS_TENTHS) return "invalid-target_fps:expected-0.1-to-2.0";
+                if (tenths < MIN_FPS_TENTHS || tenths > MAX_FPS_TENTHS) return "invalid-target_fps:expected-0.1-to-5.0";
                 d.fps = tenths;
                 return null;
             }
+            case JPEG_SIZE:
+                if (!value.equals("auto") && !JPEG_SIZE_PATTERN.matcher(value).matches())
+                    return "invalid-jpeg_size:expected-auto-or-WIDTHxHEIGHT";
+                d.jpegSize = value;
+                return null;
             case TEXT_COLOR:
                 return value.equals(TEXT_COLOR_GREEN) ? null : "invalid-text_color:only-green-is-supported";
             default:
@@ -158,6 +168,20 @@ public final class CaptureConfig {
         return new Parsed(draft.build(), null);
     }
 
+    /** Applies a complete set of decoded properties without parsing shell assignment syntax. */
+    public static Parsed updateEntries(Map<String, String> entries, CaptureConfig base) {
+        if (entries == null || entries.isEmpty()) return new Parsed(null, "no-assignments");
+        if (entries.size() > 16) return new Parsed(null, "too-many-keys");
+        Draft draft = new Draft(base);
+        for (Map.Entry<String, String> e : entries.entrySet()) {
+            String value = e.getValue();
+            if (value == null || value.length() > 64) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
+            String error = apply(draft, e.getKey(), value);
+            if (error != null) return new Parsed(null, error);
+        }
+        return new Parsed(draft.build(), null);
+    }
+
     public java.util.Map<String, String> toMap() {
         java.util.Map<String, String> m = new java.util.LinkedHashMap<>();
         m.put(OVERLAY, overlayEnabled ? "on" : "off");
@@ -166,6 +190,7 @@ public final class CaptureConfig {
         m.put(TEXT_SIZE, Integer.toString(textSize));
         m.put(FIELDS, fieldsString());
         m.put(TARGET_FPS, targetFpsString());
+        m.put(JPEG_SIZE, jpegSize);
         m.put(TEXT_COLOR, TEXT_COLOR_GREEN);
         return m;
     }

@@ -37,6 +37,8 @@ final class ConfigStore {
     static final int MAX_FILE_BYTES = 8192;
     private static final Object LOCK = new Object();
     private static final Map<String, CaptureConfig> LAST_VALID = new HashMap<>();
+    interface Validator { String validate(CaptureConfig config); }
+    private static final Validator NO_VALIDATION = config -> null;
 
     /** Effective configuration plus the state of the file it came from: ok, missing or corrupt. */
     static final class Loaded {
@@ -84,9 +86,25 @@ final class ConfigStore {
 
     /** Applies SSH-style assignments to the effective configuration and saves it; invalid input changes nothing. */
     Outcome update(String assignments) {
+        return update(assignments, NO_VALIDATION);
+    }
+
+    Outcome update(String assignments, Validator validator) {
         synchronized (LOCK) {
             CaptureConfig.Parsed parsed = CaptureConfig.parse(assignments, loadLocked().config);
             if (parsed.config == null) return new Outcome(null, parsed.error);
+            String error = validator.validate(parsed.config);
+            if (error != null) return new Outcome(null, error);
+            return save(parsed.config);
+        }
+    }
+
+    Outcome updateEntries(Map<String, String> entries, Validator validator) {
+        synchronized (LOCK) {
+            CaptureConfig.Parsed parsed = CaptureConfig.updateEntries(entries, loadLocked().config);
+            if (parsed.config == null) return new Outcome(null, parsed.error);
+            String error = validator.validate(parsed.config);
+            if (error != null) return new Outcome(null, error);
             return save(parsed.config);
         }
     }
@@ -105,6 +123,10 @@ final class ConfigStore {
      * The import file is always removed afterwards so a stale upload can never be applied later.
      */
     Outcome importPending() {
+        return importPending(NO_VALIDATION);
+    }
+
+    Outcome importPending(Validator validator) {
         synchronized (LOCK) {
             try {
                 if (!importFile.exists()) return new Outcome(null, "no-import-file-uploaded");
@@ -114,6 +136,8 @@ final class ConfigStore {
                 } catch (IOException | RuntimeException e) {
                     return new Outcome(null, "invalid-import:" + sanitize(e.getMessage()));
                 }
+                String error = validator.validate(parsed);
+                if (error != null) return new Outcome(null, error);
                 return save(parsed);
             } finally {
                 importFile.delete();

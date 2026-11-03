@@ -37,17 +37,19 @@ public final class SnapshotStreamTest {
     private static Socket open(int port, String method, String path) throws IOException {
         Socket s = new Socket(InetAddress.getByName("127.0.0.1"), port);
         s.setSoTimeout(5000);
-        s.getOutputStream().write((method + " " + path + " HTTP/1.1\r\nHost: x\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+        s.getOutputStream().write((method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1:" + port + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
         return s;
     }
 
     private static byte[] readAll(Socket s) throws IOException {
-        InputStream in = s.getInputStream();
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] b = new byte[4096];
-        int n;
-        while ((n = in.read(b)) != -1) out.write(b, 0, n);
-        return out.toByteArray();
+        try {
+            InputStream in = s.getInputStream();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] b = new byte[4096];
+            int n;
+            while ((n = in.read(b)) != -1) out.write(b, 0, n);
+            return out.toByteArray();
+        } finally { s.close(); }
     }
 
     private static String line(InputStream in) throws IOException {
@@ -109,8 +111,10 @@ public final class SnapshotStreamTest {
     public static void main(String[] args) throws Exception {
         File dir = Files.createTempDirectory("stream-test").toFile();
         File image = new File(dir, "snapshot.jpg");
+        SnapshotHttpServer server = null;
+        List<Socket> sockets = new ArrayList<>();
         try {
-            SnapshotHttpServer server = new SnapshotHttpServer(image, 0, m -> { });
+            server = new SnapshotHttpServer(image, 0, m -> { });
             server.setLimits(6, 2, 1500, 1000);
             server.start();
             int port = server.getLocalPort();
@@ -119,6 +123,7 @@ public final class SnapshotStreamTest {
 
             // Headers, no-cache, first-frame behavior and framing/JPEG integrity.
             Socket stream = open(port, "GET", "/stream.mjpg");
+            sockets.add(stream);
             InputStream in = stream.getInputStream();
             String headers = readHeaders(in);
             check(headers.startsWith("HTTP/1.1 200 OK"), "stream 200");
@@ -143,9 +148,11 @@ public final class SnapshotStreamTest {
 
             // Concurrent snapshot clients while streams and stalled readers occupy slots.
             Socket s1 = open(port, "GET", "/stream.mjpg"), s2 = open(port, "GET", "/stream.mjpg");
+            sockets.add(s1); sockets.add(s2);
             readHeaders(s1.getInputStream());
             readHeaders(s2.getInputStream());
             Socket s3 = open(port, "GET", "/stream.mjpg");
+            sockets.add(s3);
             check(status(readAll(s3)).contains("503"), "third stream rejected at the stream limit");
             s3.close();
             for (int i = 0; i < 4; i++) {
@@ -156,7 +163,10 @@ public final class SnapshotStreamTest {
             byte[] viewer = readAll(open(port, "GET", "/"));
             String page = new String(viewer, StandardCharsets.UTF_8);
             check(page.contains("200 OK") && page.contains("text/html") && page.contains("src=\"/stream.mjpg\""), "viewer page");
-            check(!page.contains("<script") && !page.contains("http://") && !page.contains("https://"), "viewer has no scripts or external assets");
+            check(page.contains("Settings") && page.contains("Authorization") && page.contains("<script nonce=")
+                && !page.contains("localStorage") && !page.contains("sessionStorage"), "viewer has in-memory authenticated settings only");
+            check(page.indexOf("id=\"settings-button\"") < page.indexOf("<img src=\"/stream.mjpg\"")
+                && !page.contains("src=\"http") && !page.contains("https://"), "settings button is outside pixels and assets are self-contained");
             check(status(readAll(open(port, "POST", "/stream.mjpg"))).contains("405"), "POST stream rejected");
             // Two streams receive the same publication independently (no per-client camera/capture).
             publish(dir, first);
@@ -167,15 +177,20 @@ public final class SnapshotStreamTest {
             publish(dir, second);
             check(Arrays.equals(readFrame(s2.getInputStream()), second), "remaining stream continues");
             Socket again = open(port, "GET", "/stream.mjpg");
+            sockets.add(again);
             check(readHeaders(again.getInputStream()).startsWith("HTTP/1.1 200"), "slot reusable after disconnect");
             again.close();
             s2.close();
 
             // Connection cap: stalled header-less sockets fill all slots; extra connection gets 503 or is closed.
             List<Socket> idle = new ArrayList<>();
-            for (int i = 0; i < 6; i++) idle.add(new Socket(InetAddress.getByName("127.0.0.1"), port));
+            for (int i = 0; i < 6; i++) {
+                Socket socket = new Socket(InetAddress.getByName("127.0.0.1"), port);
+                idle.add(socket); sockets.add(socket);
+            }
             Thread.sleep(300);
             Socket extra = new Socket(InetAddress.getByName("127.0.0.1"), port);
+            sockets.add(extra);
             extra.setSoTimeout(3000);
             check(status(readAll(extra)).contains("503"), "connection limit returns 503");
             extra.close();
@@ -192,6 +207,7 @@ public final class SnapshotStreamTest {
             server.start();
             port = server.getLocalPort();
             Socket slow = open(port, "GET", "/stream.mjpg");
+            sockets.add(slow);
             slow.setReceiveBufferSize(1024);
             readHeaders(slow.getInputStream());
             publish(dir, big);
@@ -200,18 +216,24 @@ public final class SnapshotStreamTest {
             Thread.sleep(1500);
             // After the write timeout the server closed the slow socket: draining ends in EOF/reset without a complete frame.
             long drained = 0;
-            slow.setSoTimeout(5000);
+            long drainDeadline = System.nanoTime() + 8_000_000_000L;
             try {
                 InputStream si = slow.getInputStream();
                 byte[] b = new byte[65536];
                 int n;
-                while ((n = si.read(b)) != -1) drained += n;
+                while (System.nanoTime() < drainDeadline) {
+                    slow.setSoTimeout((int) Math.max(1, (drainDeadline - System.nanoTime()) / 1_000_000L));
+                    n = si.read(b);
+                    if (n == -1) break;
+                    drained += n;
+                }
             } catch (IOException reset) { }
             check(drained < big.length, "slow client was cut off before the whole frame");
             slow.close();
 
             // Stop with open streams and restart leaves no listener, threads or stale state.
             Socket live = open(port, "GET", "/stream.mjpg");
+            sockets.add(live);
             readHeaders(live.getInputStream());
             long begin = System.nanoTime();
             server.stop();
@@ -223,6 +245,7 @@ public final class SnapshotStreamTest {
                 server.start();
                 int p = server.getLocalPort();
                 Socket st = open(p, "GET", "/stream.mjpg");
+                sockets.add(st);
                 readHeaders(st.getInputStream());
                 publish(dir, i % 2 == 0 ? second : third);
                 check(decodes(readFrame(st.getInputStream())), "frame after restart " + i);
@@ -234,6 +257,8 @@ public final class SnapshotStreamTest {
             for (Thread t : Thread.getAllStackTraces().keySet()) if (t.getName().startsWith("snapshot-http") && t.isAlive()) threads++;
             check(threads == 0, "no server threads left after stop: " + threads);
         } finally {
+            if (server != null) server.stop();
+            for (Socket socket : sockets) try { socket.close(); } catch (IOException ignored) { }
             image.delete();
             new File(dir, "snapshot.tmp").delete();
             dir.delete();

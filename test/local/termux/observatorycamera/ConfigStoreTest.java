@@ -22,7 +22,7 @@ public final class ConfigStoreTest {
         // Update, persistence across a new store instance (service restart / app update keeps filesDir).
         check(store.update("overlay=off target_fps=2 position=top-right").config != null, "update ok");
         ConfigStore again = new ConfigStore(dir);
-        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps,frames target_fps=2.0 text_color=green"), again.load().config.describe());
+        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps,frames target_fps=2.0 jpeg_size=auto text_color=green"), again.load().config.describe());
         String saved = read(live);
         check(saved.startsWith("#") && saved.contains("\ntarget_fps=2.0\n") && !new File(dir, "camera.properties.tmp").exists(), "readable commented file, no temp left");
 
@@ -45,10 +45,11 @@ public final class ConfigStoreTest {
         check(new ConfigStore(dir).load().config.location.equals(label), "UTF-8 round trip");
         // Missing keys in an import use defaults.
         check(ok.config.targetFpsTenths == 10 && ok.config.position.equals("bottom-left") && ok.config.overlayEnabled, "defaults for missing keys");
+        check(ok.config.jpegSize.equals("auto"), "missing JPEG size preserves the legacy default selection");
 
         // Invalid imports: whole file rejected, live file untouched, import file removed.
         String before = read(live);
-        String[] badImports = {"location=ok\nbogus=1\n", "text_size=500\n", "target_fps=9\n", "overlay=maybe\n", "fields=gps\n", "position=middle\n",
+        String[] badImports = {"location=ok\nbogus=1\n", "text_size=500\n", "target_fps=9\n", "jpeg_size=1280x0\n", "overlay=maybe\n", "fields=gps\n", "position=middle\n",
             "text_color=red\n", "location=a\\u00zz\n", "location=" + new String(new char[30]).replace('\0', 'x') + "\n"};
         for (String b : badImports) {
             write(imp, b);

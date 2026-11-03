@@ -64,8 +64,16 @@ public final class ContinuousCaptureService extends Service {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static volatile ContinuousStatus status = ContinuousStatus.stopped();
     private static volatile Listener listener;
+    private static volatile String effectiveJpegSize = "n/a";
+    private static volatile String metadataEstimateFps = "unknown";
+    private static volatile String applicationCapFps = "5.0";
+    private static volatile String reloadError;
 
     public static ContinuousStatus getStatus() { return status; }
+    public static String effectiveJpegSize() { return effectiveJpegSize; }
+    public static String metadataEstimateFps() { return metadataEstimateFps; }
+    public static String applicationCapFps() { return applicationCapFps; }
+    public static String reloadError() { return reloadError; }
     public static boolean isActive() { return status.isActive(); }
     public static void setListener(Listener value) { listener = value; }
 
@@ -91,6 +99,9 @@ public final class ContinuousCaptureService extends Service {
     private volatile int lastAngle = -1;
     private int sensorOrientation;
     private boolean frontFacing;
+    private CameraCapabilities capabilities;
+    private CameraCapabilities.JpegSize effectiveSize;
+    private CaptureConfig activeConfig;
     private FrameStats stats;
     private long sessionStart = -1;
     private String requestId = "-";
@@ -148,6 +159,10 @@ public final class ContinuousCaptureService extends Service {
         inFlight = false;
         lastBytes = 0;
         overlayMode = "-";
+        reloadError = null;
+        effectiveJpegSize = "unknown";
+        metadataEstimateFps = "unknown";
+        applicationCapFps = "5.0";
         lastAngle = -1;
         publish(snapshot(ContinuousStatus.STARTING, null), true);
         try {
@@ -168,11 +183,18 @@ public final class ContinuousCaptureService extends Service {
         StreamConfigurationMap map = info.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
         Size[] sizes = map == null ? null : map.getOutputSizes(ImageFormat.JPEG);
         if (sizes == null || sizes.length == 0) throw new IllegalStateException("JPEG capture unavailable.");
-        Size size = sizes[0];
-        long target = 1280L * 720L;
+        java.util.List<CameraCapabilities.JpegSize> jpegSizes = new java.util.ArrayList<>();
         for (Size candidate : sizes) {
-            if (Math.abs((long) candidate.getWidth() * candidate.getHeight() - target) < Math.abs((long) size.getWidth() * size.getHeight() - target)) size = candidate;
+            jpegSizes.add(new CameraCapabilities.JpegSize(candidate.getWidth(), candidate.getHeight(),
+                map.getOutputMinFrameDuration(ImageFormat.JPEG, candidate),
+                map.getOutputStallDuration(ImageFormat.JPEG, candidate)));
         }
+        capabilities = new CameraCapabilities(jpegSizes);
+        String invalid = capabilities.validate(config);
+        if (invalid != null) throw new IllegalArgumentException(invalid);
+        effectiveSize = capabilities.select(config);
+        activeConfig = config;
+        Size size = new Size(effectiveSize.width, effectiveSize.height);
         Integer sensorValue = info.get(CameraCharacteristics.SENSOR_ORIENTATION);
         sensorOrientation = sensorValue == null ? 0 : sensorValue;
         frontFacing = Integer.valueOf(CameraCharacteristics.LENS_FACING_FRONT).equals(info.get(CameraCharacteristics.LENS_FACING));
@@ -203,7 +225,8 @@ public final class ContinuousCaptureService extends Service {
                     if (gen != generation || !open) { opened.close(); return; }
                     device = opened;
                     try {
-                        opened.createCaptureSession(Collections.singletonList(reader.getSurface()), sessionCallback(gen), cameraHandler);
+                        opened.createCaptureSession(Collections.singletonList(reader.getSurface()),
+                            sessionCallback(gen, effectiveSize, config), cameraHandler);
                     } catch (Exception e) { MAIN.post(() -> fatal(gen, "Could not create session: " + e)); }
                 }
             }
@@ -212,12 +235,21 @@ public final class ContinuousCaptureService extends Service {
         }, cameraHandler);
     }
 
-    private CameraCaptureSession.StateCallback sessionCallback(final int gen) {
+    private CameraCaptureSession.StateCallback sessionCallback(final int gen, final CameraCapabilities.JpegSize configuredSize,
+                                                               final CaptureConfig configuredConfig) {
         return new CameraCaptureSession.StateCallback() {
             @Override public void onConfigured(CameraCaptureSession configured) {
                 synchronized (lock) {
                     if (gen != generation || !open) { configured.close(); return; }
                     session = configured;
+                    effectiveSize = configuredSize;
+                    activeConfig = configuredConfig;
+                    effectiveJpegSize = configuredSize.value();
+                    int estimate = configuredSize.metadataEstimateFpsTenths();
+                    metadataEstimateFps = configuredSize.hasTimingEstimate() ? CameraCapabilities.formatFps(estimate) : "unknown";
+                    applicationCapFps = CameraCapabilities.formatFps(capabilities.applicationCapFpsTenths(
+                        CaptureSettings.load(ContinuousCaptureService.this)));
+                    reloadError = null;
                     try {
                         builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
                         builder.addTarget(reader.getSurface());
@@ -225,9 +257,11 @@ public final class ContinuousCaptureService extends Service {
                 }
                 MAIN.post(() -> {
                     if (gen != generation) return;
-                    publish(snapshot(ContinuousStatus.RUNNING, null), true);
-                    updateNotification("Continuous JPEG capture running. The camera is in use.");
-                    Log.i(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "continuous-start", "started", "state=running"));
+                    if (status.state.equals(ContinuousStatus.STARTING)) {
+                        publish(snapshot(ContinuousStatus.RUNNING, null), true);
+                        updateNotification("Continuous JPEG capture running. The camera is in use.");
+                        Log.i(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "continuous-start", "started", "state=running"));
+                    }
                 });
                 cameraHandler.post(() -> captureNext(gen));
             }
@@ -269,7 +303,28 @@ public final class ContinuousCaptureService extends Service {
         inFlight = false;
         cameraHandler.removeCallbacks(watchdog);
         long now = SystemClock.elapsedRealtimeNanos();
-        long interval = CaptureSettings.load(this).targetIntervalNanos();
+        CaptureConfig requested = CaptureSettings.load(this);
+        String invalid = capabilities == null ? "camera-capability-unavailable" : capabilities.validate(requested);
+        if (invalid != null) {
+            boolean changed = !invalid.equals(reloadError);
+            reloadError = invalid;
+            if (changed) Log.e(TAG, "Settings reload rejected; keeping the active camera configuration: " + invalid);
+            requested = activeConfig;
+        } else {
+            reloadError = null;
+        }
+        CameraCapabilities.JpegSize desired = capabilities == null ? null : capabilities.select(requested);
+        if (desired != null && effectiveSize != null && !desired.value().equals(effectiveSize.value())) {
+            reconfigure(gen, desired, requested);
+            return;
+        }
+        activeConfig = requested;
+        if (effectiveSize != null) {
+            int estimate = effectiveSize.metadataEstimateFpsTenths();
+            metadataEstimateFps = effectiveSize.hasTimingEstimate() ? CameraCapabilities.formatFps(estimate) : "unknown";
+            applicationCapFps = CameraCapabilities.formatFps(capabilities.applicationCapFpsTenths(requested));
+        }
+        long interval = requested.targetIntervalNanos();
         long elapsed = now - captureStartNanos;
         if (success) {
             consecutiveFailures = 0;
@@ -277,6 +332,33 @@ public final class ContinuousCaptureService extends Service {
             cameraHandler.postDelayed(() -> captureNext(gen), Math.max(0, interval - elapsed) / 1_000_000L);
         } else {
             cameraHandler.postDelayed(() -> captureNext(gen), FAILURE_RETRY_MS);
+        }
+    }
+
+    /** Rebuilds the existing session and JPEG reader only between fully processed, serialized captures. */
+    private void reconfigure(int gen, CameraCapabilities.JpegSize desired, CaptureConfig requested) {
+        synchronized (lock) {
+            if (gen != generation || !open || device == null) return;
+            try {
+                if (session != null) {
+                    try { session.abortCaptures(); } catch (Exception ignored) { }
+                    session.close();
+                    session = null;
+                }
+                if (reader != null) {
+                    reader.setOnImageAvailableListener(null, null);
+                    reader.close();
+                }
+                Size size = new Size(desired.width, desired.height);
+                reader = ImageReader.newInstance(size.getWidth(), size.getHeight(), ImageFormat.JPEG, 2);
+                reader.setOnImageAvailableListener(source -> onImageAvailable(source, gen), processHandler);
+                builder = null;
+                device.createCaptureSession(Collections.singletonList(reader.getSurface()),
+                    sessionCallback(gen, desired, requested), cameraHandler);
+                Log.i(TAG, "Reconfiguring the active JPEG session to " + desired.value() + ".");
+            } catch (Exception e) {
+                MAIN.post(() -> fatal(gen, "Resolution reconfiguration failed: " + e));
+            }
         }
     }
 
@@ -315,6 +397,7 @@ public final class ContinuousCaptureService extends Service {
         }
         try {
             CaptureConfig config = CaptureSettings.load(this);
+            if (capabilities != null && capabilities.validate(config) != null) config = activeConfig;
             int number = (int) Math.min(Integer.MAX_VALUE, stats.frames() + 1);
             FrameOverlay.Result r = FrameOverlay.process(data, config, stats.fpsWith(acquired), number, wall, TimeZone.getTimeZone(zone));
             boolean published = SnapshotPublisher.publish(getFilesDir(), "snapshot.jpg", r.jpeg, () -> gen == generation);
@@ -351,6 +434,7 @@ public final class ContinuousCaptureService extends Service {
     /** Main thread: unrecoverable error; release everything and report state=error. */
     private void fatal(int gen, String message) {
         if (gen != generation || !open) return;
+        reloadError = message;
         Log.e(TAG, message);
         Log.e(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "continuous-start", "failed", "reason=" + message));
         ContinuousStatus current = snapshot(ContinuousStatus.ERROR, message);
@@ -361,6 +445,7 @@ public final class ContinuousCaptureService extends Service {
     }
 
     private void failStart(String reason) {
+        reloadError = reason;
         Log.e(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "continuous-start", "failed", "reason=" + reason));
         ContinuousStatus current = snapshot(ContinuousStatus.ERROR, reason);
         closeResources();

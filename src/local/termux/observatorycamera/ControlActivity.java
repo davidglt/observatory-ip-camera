@@ -90,7 +90,9 @@ public final class ControlActivity extends Activity {
             case ControlCommand.CONFIG_SET: configSet(command); break;
             case ControlCommand.CONFIG_RESET: configReset(command); break;
             case ControlCommand.CONFIG_EXPORT: configOutcome(command, CaptureSettings.store(this).materialize()); break;
-            case ControlCommand.CONFIG_IMPORT: configOutcome(command, CaptureSettings.store(this).importPending()); break;
+            case ControlCommand.CONFIG_IMPORT: configOutcome(command, CaptureSettings.store(this).importPending(this::validateConfig)); break;
+            case ControlCommand.ADMIN_TOKEN_SHOW: adminToken(command, false); break;
+            case ControlCommand.ADMIN_TOKEN_ROTATE: adminToken(command, true); break;
             default: status(command);
         }
         if (awaiting == null) finish();
@@ -162,6 +164,11 @@ public final class ControlActivity extends Activity {
         boolean camera = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
         Log.i(TAG, ControlCommand.line(command.requestId, command.name, "continuous-status",
             ContinuousCaptureService.getStatus().describe(SystemClock.elapsedRealtimeNanos())
+            + " desired_size=" + CaptureSettings.load(this).jpegSize
+            + " effective_size=" + ContinuousCaptureService.effectiveJpegSize()
+            + " metadata_estimate_fps=" + ContinuousCaptureService.metadataEstimateFps()
+            + " application_cap_fps=" + ContinuousCaptureService.applicationCapFps()
+            + " reload_error=" + (ContinuousCaptureService.reloadError() == null ? "none" : ContinuousCaptureService.reloadError().replaceAll("[^A-Za-z0-9_.:-]", "-"))
             + " camera=" + (camera ? "granted" : "denied") + " notifications=" + notificationState()
             + " owner=" + CameraArbiter.shared().owner()));
     }
@@ -172,7 +179,7 @@ public final class ControlActivity extends Activity {
             + " file=" + loaded.fileState + (loaded.error == null ? "" : " fileError=" + loaded.error)));
     }
 
-    private void configSet(ControlCommand command) { configOutcome(command, CaptureSettings.store(this).update(command.config)); }
+    private void configSet(ControlCommand command) { configOutcome(command, CaptureSettings.store(this).update(command.config, this::validateConfig)); }
 
     private void configReset(ControlCommand command) { configOutcome(command, CaptureSettings.store(this).reset()); }
 
@@ -182,7 +189,25 @@ public final class ControlActivity extends Activity {
             Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=" + outcome.error));
             return;
         }
-        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", outcome.config.describe() + " applied=next-frame"));
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", outcome.config.describe() + " applied=next-frame-or-session"));
+    }
+
+    private String validateConfig(CaptureConfig config) {
+        try { return CameraCapabilityReader.read(this).validate(config); }
+        catch (Exception e) { return "camera-capability-unavailable"; }
+    }
+
+    /** The token value is intentionally never written to logcat or an intent extra. */
+    private void adminToken(ControlCommand command, boolean rotate) {
+        try {
+            AdminTokenStore store = new AdminTokenStore(getFilesDir());
+            if (rotate) store.rotate();
+            else store.provision();
+            Log.i(TAG, ControlCommand.line(command.requestId, command.name, rotate ? "rotated" : "ready",
+                "token_file=" + AdminTokenStore.FILE_NAME));
+        } catch (Exception e) {
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=token-operation-failed"));
+        }
     }
 
     private String notificationState() {

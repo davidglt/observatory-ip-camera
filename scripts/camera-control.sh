@@ -33,11 +33,13 @@ Subcommands:
   continuous-status  state, session frames, measured FPS, last capture time/age, processing diagnostics
   config-show        show the persistent capture/overlay settings
   config-set K=V ... validate and save settings atomically (overlay=on|off location=NAME position=bottom-left|bottom-right|top-left|top-right
-                     text_size=10-96 fields=location,datetime,fps,frames target_fps=0.1-2.0); applied from the next frame
+                     text_size=10-96 fields=location,datetime,fps,frames jpeg_size=auto|WIDTHxHEIGHT target_fps=0.1-5.0); applied from the next frame/session
   config-reset       restore default settings
   config-export --out FILE   save the live camera.properties (normalized) to FILE on this host
   config-import --in FILE    upload FILE, validate it completely on the device, then replace the live settings
                      (invalid file: nothing changes, exit 2 with the reason). Applied from the next frame.
+  admin-token-show   provision if needed and print the persistent HTTP settings token (explicit local control only)
+  admin-token-rotate invalidate the previous HTTP settings token and print a new one
   setup-permissions  grant CAMERA and POST_NOTIFICATIONS via 'pm grant' (only when you run it)
 
 Options: --timeout SECONDS (default 20), --no-wake, --force (fetch overwrite), --out FILE, --lines N
@@ -60,7 +62,7 @@ while [[ $# -gt 0 ]]; do
         --no-wake) WAKE=0; shift ;;
         --force) FORCE=1; shift ;;
         -h|--help|help) usage; exit 0 ;;
-        start|stop|status|capture|fetch|logs|setup-permissions|continuous-start|continuous-stop|continuous-status|config-show|config-set|config-reset|config-export|config-import)
+        start|stop|status|capture|fetch|logs|setup-permissions|continuous-start|continuous-stop|continuous-status|config-show|config-set|config-reset|config-export|config-import|admin-token-show|admin-token-rotate)
             [[ -z $SUB ]] || die $EX_USAGE "Only one subcommand allowed."; SUB=$1; shift ;;
         *=*)
             [[ $SUB == config-set ]] || die $EX_USAGE "Unexpected assignment '$1' (only valid after config-set)."
@@ -385,6 +387,19 @@ cmd_config_import() {
     echo "Imported: ${line#*result=config }"
 }
 
+cmd_admin_token() {
+    local id line token command
+    if [[ $SUB == admin-token-rotate ]]; then command=admin-token-rotate; else command=admin-token-show; fi
+    id=$(new_id)
+    send_control "$command" "$id"
+    line=$(wait_control "$id" "$command" 'result=(ready|rotated|failed)') || die $EX_TIMEOUT "Timeout waiting for the token control command."
+    grep -q 'result=failed' <<<"$line" && die $EX_FAIL "Token operation failed (the token value was not logged)."
+    token=$(adbt exec-out run-as "$PKG" cat files/http-admin.token 2>/dev/null | tr -d '\r\n') \
+        || die $EX_FAIL "Could not retrieve the app-private token through run-as."
+    [[ $token =~ ^[A-Za-z0-9_-]{43}$ ]] || die $EX_FAIL "The app-private token file is missing or invalid."
+    printf 'HTTP admin token (plaintext HTTP; store securely and enter only in the viewer): %s\n' "$token"
+}
+
 cmd_logs() {
     echo "== permissions =="
     echo "CAMERA: $(perm_state android.permission.CAMERA)"
@@ -425,4 +440,5 @@ case $SUB in
     config-show|config-set|config-reset) cmd_config ;;
     config-export) cmd_config_export ;;
     config-import) cmd_config_import ;;
+    admin-token-show|admin-token-rotate) cmd_admin_token ;;
 esac
