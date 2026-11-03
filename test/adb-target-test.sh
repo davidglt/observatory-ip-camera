@@ -84,7 +84,12 @@ cat > "$T/python-stdlib" <<PY
 exec env -u PYTHONPATH "$(command -v python3)" -S "\$@"
 PY
 chmod +x "$T/python-stdlib"
-export PATH="$T:$PATH"
+. "$ROOT/test/hermetic-path.sh"
+SENTINEL_LOG="$T/sentinel-calls"; : > "$SENTINEL_LOG"
+hermetic_sentinels "$T/installed" "$SENTINEL_LOG"
+PATH="$T/installed:$PATH"   # simulates a user's installed real tools in the inherited PATH
+hermetic_path "$T/stdtools"
+export PATH="$T:$T/stdtools"
 export ADB="$T/adb"
 unset TARGET
 H="$ROOT/scripts/adb-target.sh"
@@ -233,6 +238,7 @@ check "wireless recovery is opt-in" 10 "" 'no device found' run
 setdev
 mv "$T/wireless-debugging" "$T/wireless-debugging.disabled"
 check "missing wireless wrapper" 3 "" 'wireless-debugging command not found' run --wireless-on
+[[ ! -s $SENTINEL_LOG ]] && echo "ok: missing wrapper did not reach installed wrapper" || { echo "FAIL: installed wrapper reached"; fails=$((fails+1)); }
 mv "$T/wireless-debugging.disabled" "$T/wireless-debugging"
 setdev
 FAKE_WIRELESS_MODE=fail check "wireless wrapper failure" 13 "" 'wireless-debugging on failed' run --wireless-on
@@ -295,4 +301,5 @@ setdev "A1 device"
 t=$(bash "$H" 2>/dev/null) && [[ $t == A1 ]] && echo "ok: export via command substitution" || { echo "FAIL: cmd subst"; fails=$((fails+1)); }
 setdev
 if t=$(bash "$H" 2>/dev/null); then echo "FAIL: failure-safe"; fails=$((fails+1)); else echo "ok: failure-safe assignment"; fi
+[[ ! -s $SENTINEL_LOG ]] && echo "ok: installed real tools in inherited PATH were never invoked" || { echo "FAIL: installed tool invoked"; cat "$SENTINEL_LOG"; fails=$((fails+1)); }
 exit $(( fails > 0 ))
