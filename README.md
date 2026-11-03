@@ -32,6 +32,13 @@ Connections are handled concurrently with explicit limits (see "MJPEG stream and
 
 All existing features can be driven without touching the phone, from Termux over SSH via an already authorized adb connection (this document does not cover initial adb pairing, which needs authorization on the device). Use scripts/camera-control.sh. It always requires an explicit device (`-s TARGET` or the TARGET environment variable; the exact serial or host:port from `adb devices`), never auto-selects among several devices, has no hardcoded adb port, and checks that the device state is `device` and the app is installed.
 
+Prepare `TARGET` before running camera commands. For explicit wireless-debugging recovery, source the target helper and request both refresh and activation once; camera-control commands themselves never enable wireless debugging:
+
+```sh
+source scripts/adb-target.sh
+adbt_export --refresh --wireless-on
+```
+
 ```sh
 bash scripts/camera-control.sh -s "$TARGET" setup-permissions   # only when you want it: pm grant CAMERA and POST_NOTIFICATIONS
 bash scripts/camera-control.sh -s "$TARGET" start
@@ -167,14 +174,18 @@ Keep the signing identity and password under $HOME/.local/share/observatory-ip-c
 
 ## Automated deploy over SSH (Termux)
 
-Two helper scripts automate target resolution and deployment. They work from any directory, never install packages, never pair adb, and never uninstall, clear data, downgrade, grant permissions, start services or change device settings.
+Two helper scripts automate target resolution and deployment. They work from any directory and never install packages, pair adb, uninstall, clear data, downgrade, grant permissions or start app services. They do not change device settings by default; wireless-debugging activation is an explicit opt-in and is never performed by camera-control commands.
 
-Target helper, `scripts/adb-target.sh`: precedence is `-s/--target SERIAL`, then the existing `TARGET`, then the single authorized device in `adb devices -l`. Each candidate must report `device` from `adb -s X get-state`; identity and model go to stderr, the serial alone to stdout. Ambiguous, unauthorized, offline or missing targets are rejected (exit 11, 12, 12, 10); an explicit or existing target that fails is never silently replaced. `--refresh` ignores a stale `TARGET` and re-resolves (with a notice if it changes). `--mdns` is opt-in: if no authorized device is connected it reconnects the single already paired local wireless device advertised by `adb mdns services` (never pairs, never scans networks, no hardcoded port, never disconnects devices or restarts the adb server).
+Target helper, `scripts/adb-target.sh`: precedence is `-s/--target SERIAL`, then the existing `TARGET`, then the single authorized device in `adb devices -l`. Each candidate must report `device` from `adb -s X get-state`; identity and model go to stderr, the serial alone to stdout. Ambiguous, unauthorized, offline or missing targets are rejected; an explicit or existing target that fails is never silently replaced. `--refresh` ignores a stale `TARGET` and re-resolves (with a notice if it changes). `--mdns` is opt-in discovery/reconnection only: it first uses `adb mdns services`; only if that command explicitly reports mDNS unsupported does it use the external Python helper `scripts/adb-mdns-discover.py` with the `zeroconf` package. Discovery is limited to local IPv4 `_adb-tls-connect._tcp.local.` services and validated TCP ports. mDNS advertisements are untrusted discovery, not proof of pairing or device identity; the helper connects only to one unambiguous endpoint, then requires `adb get-state=device` and reports the connected device identity. It never pairs, scans arbitrary ports, selects a service by order, or connects to a non-local advertised address. A failing native mDNS backend, missing Python dependency, timeout or ambiguous result is reported rather than silently treated as no services. Configure the interpreter with `ADB_DISCOVERY_PYTHON`; the default is `$HOME/.venvs/adb-discovery/bin/python`. Install `zeroconf` into that environment yourself; dependencies are never installed automatically. The total zeroconf discovery deadline defaults to 15 seconds and can be set with `ADB_MDNS_TIMEOUT` (1-60 seconds).
+
+`--wireless-on` remains a separate explicit opt-in: if no usable device is found, it runs the installed `wireless-debugging on` wrapper with a bounded timeout, then re-reads `adb devices` and validates the selected device. That wrapper changes wireless-debugging only on the local Android phone where it is installed; it cannot activate debugging on an mDNS-discovered remote target. Its human-readable output is not parsed. With both `--mdns` and `--wireless-on`, discovery/reconnection is tried first; only a no-services result permits local activation. A backend failure, timeout, invalid service or ambiguous discovery stops without enabling wireless debugging. Explicit `-s` always takes precedence, and an existing `TARGET` still requires `--refresh` before re-resolution. The wireless activation timeout defaults to 45 seconds and can be set with `ADBT_WIRELESS_ON_TIMEOUT` (1-300 seconds). Neither option pairs, reads/logs tokens, deletes keys, restarts the adb server, reboots, or installs packages.
 
 ```sh
 # A child process cannot export into its parent. Either source the helper (it only defines functions,
 # never exits or changes options/traps/cwd; on failure it unsets TARGET so nothing stale remains):
 source scripts/adb-target.sh; adbt_export            # or: adbt_export --refresh / -s SERIAL / --mdns
+# Explicit recovery when no device is usable; --refresh is needed to accept a changed wireless serial:
+source scripts/adb-target.sh; adbt_export --refresh --wireless-on
 # or use the serial mode with failure-safe assignment:
 if T=$(bash scripts/adb-target.sh); then export TARGET="$T"; else unset TARGET; fi
 ```
@@ -188,9 +199,13 @@ bash scripts/deploy.sh --test-only
 bash scripts/deploy.sh --build-only          # no device needed
 bash scripts/deploy.sh --install-only        # only an artifact built by deploy.sh for the current commit/diff
 bash scripts/deploy.sh --git-update          # opt-in: fetch origin main + merge --ff-only
+bash scripts/deploy.sh --git-update --refresh-target --wireless-on  # explicitly recover before resolving/installing
+bash scripts/deploy.sh --refresh-target --mdns  # discover/reconnect an existing local mDNS target
 ```
 
 Signing: if the app is already installed on the target but no signing identity exists, the deploy stops with an actionable error instead of letting build.sh create a replacement key; an incomplete identity is also refused. Private signing data is never logged. `--install-only` limitation: the stamp fingerprints the commit, the tracked diff and the APK hash; untracked files are not covered. `--git-update` requires a clean tree on `main` and an `origin` matching `davidglt/observatory-ip-camera` (override with `DEPLOY_REMOTE_PATTERN`); it never resets, stashes or checks out. Without it the local checkout is built and the commit plus dirty status are reported. Logs are private, size-bounded, timestamped files in `~/.local/state/observatory-ip-camera/logs` (outside the source tree, last 20 kept); a run summary lists commit, target, APK version, result and log path. Concurrent runs are refused with a lock.
+
+`scripts/camera-control.sh` continues to require an explicit `-s TARGET` or a previously exported `TARGET`; it never activates wireless debugging or resolves a target itself. Prepare and recover the target beforehand with the sourced helper above, then run camera commands normally.
 
 Validation status: both scripts are tested against a fake adb and fake build/test scripts (`bash test/adb-target-test.sh`, `bash test/deploy-test.sh`, also run by `bash test/run.sh`). A real phone, the real Termux build tools and a real install were NOT exercised.
 

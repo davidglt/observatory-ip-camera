@@ -5,8 +5,15 @@
 echo "$*" >> "$FAKE_LOG"
 case "$1" in
     devices) echo "List of devices attached"; while read -r s st; do [[ -n $s ]] && echo "$s	$st	product:x model:Fake"; done < "$FAKE_DEVICES"; exit 0 ;;
-    mdns) cat "$FAKE_MDNS" 2>/dev/null; exit 0 ;;
-    connect) echo "connected to $2"; echo "$2 device" >> "$FAKE_DEVICES"; exit 0 ;;
+    mdns)
+        if [[ ${FAKE_MDNS_UNSUPPORTED:-} == 1 ]]; then echo "adb: unknown command mdns services" >&2; exit 1; fi
+        if [[ ${FAKE_MDNS_FAIL:-} == 1 ]]; then echo "adb mdns backend unavailable" >&2; exit 1; fi
+        cat "$FAKE_MDNS" 2>/dev/null; exit 0 ;;
+    connect)
+        echo "connected to $2"
+        echo "$2 ${FAKE_CONNECT_STATE:-device}" >> "$FAKE_DEVICES"
+        [[ -z ${FAKE_CONNECT_EXTRA:-} ]] || echo "$FAKE_CONNECT_EXTRA" >> "$FAKE_DEVICES"
+        exit 0 ;;
     kill-server|disconnect|pair|start-server) echo "FORBIDDEN: $*" >> "$FAKE_LOG.bad"; exit 1 ;;
 esac
 [[ $1 == -s ]] || { echo "adb called without -s: $*" >> "$FAKE_LOG.bad"; exit 1; }
