@@ -164,6 +164,35 @@ git pull --ff-only && bash build.sh
 
 Keep the signing identity and password under $HOME/.local/share/observatory-ip-camera/signing private, backed up and unchanged for updates. Never commit keys, credentials or camera images.
 
+## Automated deploy over SSH (Termux)
+
+Two helper scripts automate target resolution and deployment. They work from any directory, never install packages, never pair adb, and never uninstall, clear data, downgrade, grant permissions, start services or change device settings.
+
+Target helper, `scripts/adb-target.sh`: precedence is `-s/--target SERIAL`, then the existing `TARGET`, then the single authorized device in `adb devices -l`. Each candidate must report `device` from `adb -s X get-state`; identity and model go to stderr, the serial alone to stdout. Ambiguous, unauthorized, offline or missing targets are rejected (exit 11, 12, 12, 10); an explicit or existing target that fails is never silently replaced. `--refresh` ignores a stale `TARGET` and re-resolves (with a notice if it changes). `--mdns` is opt-in: if no authorized device is connected it reconnects the single already paired local wireless device advertised by `adb mdns services` (never pairs, never scans networks, no hardcoded port, never disconnects devices or restarts the adb server).
+
+```sh
+# A child process cannot export into its parent. Either source the helper (it only defines functions,
+# never exits or changes options/traps/cwd; on failure it unsets TARGET so nothing stale remains):
+source scripts/adb-target.sh; adbt_export            # or: adbt_export --refresh / -s SERIAL / --mdns
+# or use the serial mode with failure-safe assignment:
+if T=$(bash scripts/adb-target.sh); then export TARGET="$T"; else unset TARGET; fi
+```
+
+Deploy, `scripts/deploy.sh`: default runs `test/run.sh`, then `build.sh` (existing build and signing logic), then installs only the newly built `dist/observatory-ip-camera.apk` with `adb -s TARGET install -r` and verifies the installed package version against the APK metadata (`aapt2 dump badging`). Exit codes are phase specific: 20 prerequisites, 21 git, 22 signing identity, 23 tests, 24 build, 25 APK signature/metadata, 26 target, 27 install, 28 verification, 29 another run in progress, 30 stale artifact. The old APK is deleted before building, so a failed build can never lead to an install of an old artifact.
+
+```sh
+bash scripts/deploy.sh                       # tests, build, install, verify (target: -s, TARGET or the single device)
+bash scripts/deploy.sh -s "$TARGET"          # explicit target
+bash scripts/deploy.sh --test-only
+bash scripts/deploy.sh --build-only          # no device needed
+bash scripts/deploy.sh --install-only        # only an artifact built by deploy.sh for the current commit/diff
+bash scripts/deploy.sh --git-update          # opt-in: fetch origin main + merge --ff-only
+```
+
+Signing: if the app is already installed on the target but no signing identity exists, the deploy stops with an actionable error instead of letting build.sh create a replacement key; an incomplete identity is also refused. Private signing data is never logged. `--install-only` limitation: the stamp fingerprints the commit, the tracked diff and the APK hash; untracked files are not covered. `--git-update` requires a clean tree on `main` and an `origin` matching `davidglt/observatory-ip-camera` (override with `DEPLOY_REMOTE_PATTERN`); it never resets, stashes or checks out. Without it the local checkout is built and the commit plus dirty status are reported. Logs are private, size-bounded, timestamped files in `~/.local/state/observatory-ip-camera/logs` (outside the source tree, last 20 kept); a run summary lists commit, target, APK version, result and log path. Concurrent runs are refused with a lock.
+
+Validation status: both scripts are tested against a fake adb and fake build/test scripts (`bash test/adb-target-test.sh`, `bash test/deploy-test.sh`, also run by `bash test/run.sh`). A real phone, the real Termux build tools and a real install were NOT exercised.
+
 ## Install and test over SSH
 
 First stop the old Python server with Ctrl+C in its session. It uses the same port, even if bound only to loopback. Do not run both servers. A native bind failure is shown in the app and logged; the camera still works.
