@@ -82,16 +82,24 @@ public final class SnapshotHttpServerTest {
             check(head.length == indexOf(head, "\r\n\r\n") + 4, "HEAD has no body");
             check(indexOf(request(port, "GET", "/other"), "404 Not Found") > 0, "other path 404");
             check(indexOf(request(port, "POST", "/snapshot.jpg"), "405") > 0, "POST rejected");
+            check(indexOf(request(port, "GET", "/", "Host: 127.0.0.1:18080\r\n", new byte[0]), "200 OK") > 0,
+                "numeric forwarded Host supports SSH tunnels");
             byte[] viewer = request(port, "GET", "/");
             String viewerText = new String(viewer, "UTF-8");
             check(viewerText.contains("Settings") && viewerText.contains("Authorization")
-                && viewerText.contains("script-src 'nonce-") && viewerText.contains("X-Frame-Options: DENY"),
+                && viewerText.contains("script-src 'nonce-") && viewerText.contains("connect-src 'self'")
+                && viewerText.contains("X-Frame-Options: DENY")
+                && viewerText.indexOf("Content-Security-Policy:") == viewerText.lastIndexOf("Content-Security-Policy:"),
                 "settings viewer has restrictive security headers");
             check(!viewerText.contains(token) && viewerText.contains("Forget token")
                 && viewerText.contains("stream.mjpg"), "viewer has no embedded token and preserves stream");
             check(indexOf(request(port, "GET", "/api/config"), "401 Unauthorized") > 0, "admin API requires bearer token");
             String auth = "Authorization: Bearer " + token + "\r\n";
             check(indexOf(request(port, "GET", "/api/config", auth, new byte[0]), "200 OK") > 0, "authenticated GET");
+            check(indexOf(request(port, "GET", "/api/config", "Cookie: admin=" + token + "\r\n", new byte[0]),
+                "401 Unauthorized") > 0, "cookies do not authenticate");
+            check(indexOf(request(port, "GET", "/api/config?token=" + token, "", new byte[0]),
+                "401 Unauthorized") > 0, "URL token does not authenticate");
             check(indexOf(request(port, "PUT", "/api/config", auth
                 + "Origin: http://127.0.0.1:" + port + "\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 3\r\n",
                 "a=b".getBytes("US-ASCII")), "200 OK") > 0, "same-origin authenticated PUT");
@@ -101,12 +109,24 @@ public final class SnapshotHttpServerTest {
             check(indexOf(request(port, "PUT", "/api/config", auth
                 + "Origin: http://evil.example:" + port + "\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 3\r\n",
                 "a=b".getBytes("US-ASCII")), "403 Forbidden") > 0, "cross-origin mutation rejected");
+            check(indexOf(request(port, "PUT", "/api/config", auth
+                + "Origin: http://127.0.0.1:" + port + "\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 4097\r\n",
+                new byte[0]), "413 Content Too Large") > 0, "API body limit");
             check(indexOf(request(port, "GET", "/api/config", "Host: evil.example\r\n" + auth, new byte[0]),
                 "400 Bad Request") > 0, "DNS host rejected");
             tokenStore.rotate();
             check(indexOf(request(port, "GET", "/api/config", auth, new byte[0]), "401 Unauthorized") > 0,
                 "rotation invalidates the prior bearer token");
             check(indexOf(request(port, "GET", "/snapshot.jpg"), "200 OK") > 0, "snapshot remains unauthenticated");
+            Socket slowBody = new Socket(InetAddress.getByName("127.0.0.1"), port);
+            sockets.add(slowBody);
+            slowBody.setSoTimeout(7000);
+            String slowHeaders = "PUT /api/config HTTP/1.1\r\nHost: 127.0.0.1:" + port + "\r\n"
+                + "Authorization: Bearer " + tokenStore.read() + "\r\nOrigin: http://127.0.0.1:" + port + "\r\n"
+                + "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 3\r\n\r\n";
+            slowBody.getOutputStream().write((slowHeaders + "a").getBytes("US-ASCII"));
+            Thread.sleep(5200);
+            check(slowBody.getInputStream().read() == -1, "incomplete body closes at request deadline");
 
             // Active, stalled client must be closed by stop().
             Socket stalled = new Socket(InetAddress.getByName("127.0.0.1"), port);

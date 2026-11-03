@@ -9,9 +9,19 @@ public final class ConfigStoreTest {
     private static void check(boolean ok, String name) { if (!ok) throw new AssertionError(name); }
     private static void write(File f, String text) throws Exception { Files.write(f.toPath(), text.getBytes(StandardCharsets.UTF_8)); }
     private static String read(File f) throws Exception { return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8); }
+    private static void deleteTree(File file) {
+        if (file == null || !file.exists()) return;
+        File[] children = file.listFiles();
+        if (children != null) for (File child : children) deleteTree(child);
+        file.delete();
+    }
 
     public static void main(String[] args) throws Exception {
         File dir = Files.createTempDirectory("cfg").toFile();
+        File other = null;
+        File fresh = null;
+        File capabilityDir = null;
+        try {
         ConfigStore store = new ConfigStore(dir);
         File live = new File(dir, "camera.properties");
 
@@ -29,6 +39,21 @@ public final class ConfigStoreTest {
         // Invalid update changes nothing.
         ConfigStore.Outcome bad = store.update("overlay=on text_size=5");
         check(bad.config == null && bad.error.startsWith("invalid-text_size") && read(live).equals(saved), "invalid update preserves file");
+
+        capabilityDir = Files.createTempDirectory("cfg-capabilities").toFile();
+        ConfigStore capabilityStore = new ConfigStore(capabilityDir);
+        CameraCapabilities caps = new CameraCapabilities(java.util.Arrays.asList(
+            new CameraCapabilities.JpegSize(1280, 720, 1_000_000_000L, 0),
+            new CameraCapabilities.JpegSize(1920, 1080, 0, 0)));
+        java.util.Map<String, String> unsupported = new java.util.LinkedHashMap<>();
+        unsupported.put("jpeg_size", "640x480");
+        unsupported.put("target_fps", "2");
+        ConfigStore.Outcome rejectedCapability = capabilityStore.updateEntries(unsupported, caps::validate);
+        check(rejectedCapability.config == null && !new File(capabilityDir, ConfigStore.FILE_NAME).exists(),
+            "unsupported web-style update is atomic");
+        unsupported.put("jpeg_size", "1280x720");
+        check(capabilityStore.updateEntries(unsupported, caps::validate).config == null
+            && !new File(capabilityDir, ConfigStore.FILE_NAME).exists(), "metadata cap rejects unsupported FPS without creating config");
 
         // UTF-8 round trip (non-ASCII label written and read back as UTF-8, not platform charset).
         String label = "Obs\u00e9rvatoire \u5929\u6587";
@@ -66,7 +91,7 @@ public final class ConfigStoreTest {
         ConfigStore.Loaded c = store.load();
         check(c.fileState.equals("corrupt") && c.error != null && c.config.location.equals(label) && read(live).equals("text_size=banana\n"), "corrupt keeps last valid, reports");
         // A new process with no memory falls back to defaults.
-        File other = Files.createTempDirectory("cfg2").toFile();
+        other = Files.createTempDirectory("cfg2").toFile();
         write(new File(other, "camera.properties"), "\u0000garbage");
         check(new ConfigStore(other).load().config.describe().equals(CaptureConfig.defaults().describe()) && new ConfigStore(other).load().fileState.equals("corrupt"), "corrupt without history uses defaults");
         // Explicit update repairs the file from the effective configuration.
@@ -83,7 +108,7 @@ public final class ConfigStoreTest {
 
         // Reset, materialize.
         check(store.reset().config.describe().equals(CaptureConfig.defaults().describe()), "reset");
-        File fresh = Files.createTempDirectory("cfg3").toFile();
+        fresh = Files.createTempDirectory("cfg3").toFile();
         ConfigStore fs = new ConfigStore(fresh);
         check(fs.materialize().config != null && new File(fresh, "camera.properties").exists() && fs.load().fileState.equals("ok"), "materialize writes defaults");
 
@@ -102,5 +127,11 @@ public final class ConfigStoreTest {
         ConfigStore.Loaded end = new ConfigStore(dir).load();
         check(end.fileState.equals("ok") && end.config.textSize >= 10 && end.config.textSize <= 17, "concurrent updates leave a valid file");
         System.out.println("ConfigStoreTest passed");
+        } finally {
+            deleteTree(dir);
+            deleteTree(other);
+            deleteTree(fresh);
+            deleteTree(capabilityDir);
+        }
     }
 }

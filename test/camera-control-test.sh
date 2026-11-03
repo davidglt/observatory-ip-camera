@@ -16,7 +16,10 @@ reject() { echo "fake adb: unsupported call: $*" >> "$FAKE_LOG.bad"; echo "fake 
 case "$1" in
     get-state) [[ $S == offline ]] && echo offline || echo device ;;
     forward) [[ $2 == --remove ]] || echo "$FAKE_PORT" ;;
-    exec-out) cat "$FAKE_EXPORT" 2>/dev/null </dev/null ;;
+    exec-out)
+        if [[ $2 == run-as && $3 == local.termux.observatorycamera && $4 == cat && $5 == files/http-admin.token ]]; then
+            printf '%s' "${FAKE_TOKEN:-}"
+        else cat "$FAKE_EXPORT" 2>/dev/null </dev/null; fi ;;
     logcat) cat "$FAKE_LOGCAT" 2>/dev/null </dev/null ;;
     shell)
         # The only call allowed to consume stdin: the exact config-import upload command.
@@ -154,6 +157,10 @@ expect config-import-missing 2 "Cannot read" -s T config-import --in "$T/none"
 expect config-import-needs-in 2 "needs --in" -s T config-import
 head -c 9000 /dev/zero > "$T/big"
 expect config-import-big 2 "larger than" -s T config-import --in "$T/big"
+export FAKE_TOKEN=$(printf 'A%.0s' $(seq 1 43))
+FAKE_LOGLINE="cmd=admin-token-show result=ready token_file=http-admin.token" expect admin-token-show 0 "plaintext HTTP.*$FAKE_TOKEN" -s T --no-wake --timeout 5 admin-token-show
+FAKE_LOGLINE="cmd=admin-token-rotate result=rotated token_file=http-admin.token" expect admin-token-rotate 0 "plaintext HTTP.*$FAKE_TOKEN" -s T --no-wake --timeout 5 admin-token-rotate
+if grep -Fq "$FAKE_TOKEN" "$FAKE_LOG" "$FAKE_LOGCAT"; then echo "FAIL admin token leaked to adb command/log output"; fails=$((fails+1)); else echo "ok token absent from adb command and log output"; fi
 n=$(wc -l < "$FAKE_LOG")
 expect config-injection 2 "Invalid assignment" -s T config-set 'overlay=on;reboot'
 expect config-injection-sub 2 "Invalid assignment" -s T config-set 'location=$(id)'

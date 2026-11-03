@@ -20,7 +20,7 @@ public final class CaptureConfigTest {
         check(d.jpegSize.equals("auto"), "legacy files retain automatic default resolution");
         check(d.describe().equals("overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps,frames target_fps=1.0 jpeg_size=auto text_color=green"), d.describe());
         check(ok("target_fps=2").targetIntervalNanos() == 500_000_000L, "2 FPS interval");
-        check(ok("target_fps=5").targetFpsTenths == 50, "application maximum");
+        check(ok("target_fps=3").targetFpsTenths == 30, "application maximum");
         check(ok("target_fps=0.5").targetFpsTenths == 5, "0.5");
         check(ok("jpeg_size=1920x1080").jpegSize.equals("1920x1080"), "explicit JPEG size");
         check(ok("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime,frames").describe()
@@ -28,7 +28,7 @@ public final class CaptureConfigTest {
         check(ok("fields=frames,location").fieldsString().equals("location,frames"), "canonical field order");
         for (String b : new String[]{"", "   ", "overlay", "overlay=", "=on", "overlay=yes", "location=", "location=a b".replace(' ', '$'),
             "location=" + new String(new char[25]).replace('\0', 'a'), "location=x;y", "position=middle", "text_size=9", "text_size=97", "text_size=abc",
-            "text_size=-5", "fields=", "fields=gps", "fields=fps,fps", "fields=fps,,frames", "target_fps=0", "target_fps=0.0", "target_fps=5.1", "target_fps=6",
+            "text_size=-5", "fields=", "fields=gps", "fields=fps,fps", "fields=fps,,frames", "target_fps=0", "target_fps=0.0", "target_fps=3.1", "target_fps=6",
             "target_fps=1.25", "target_fps=-1", "bogus=1", "overlay=on overlay=off"}) bad(b);
         bad("jpeg_size=1280x0");
         bad("jpeg_size=1280x720;reboot");

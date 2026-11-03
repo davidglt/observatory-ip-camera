@@ -48,30 +48,33 @@ public final class SnapshotHttpServer {
         + "img{display:block;max-width:100%;height:auto;margin:0 auto}p{margin:8px;font-size:small}#settings{padding:1em;background:#222}"
         + "label{display:block;margin:.5em 0}input,select,button{font:inherit;margin:.2em}#settings[hidden]{display:none}</style>"
         + "</head><body><header><strong>Observatory camera</strong><button id=\"settings-button\" type=\"button\">Settings</button></header>"
-        + "<section id=\"settings\" hidden><h2>Settings</h2><label>Admin token <input id=\"token\" type=\"password\" autocomplete=\"off\"></label>"
+        + "<section id=\"settings\" hidden><h2>Settings</h2><p>Metadata FPS is an estimate, not guaranteed throughput. Requested target, application cap and measured rate are separate.</p>"
+        + "<label>Admin token <input id=\"token\" type=\"password\" autocomplete=\"off\"></label>"
         + "<button id=\"load\" type=\"button\">Load settings</button><button id=\"clear\" type=\"button\">Forget token</button>"
         + "<form id=\"form\" hidden><label>Overlay <select name=\"overlay\"><option>on</option><option>off</option></select></label>"
         + "<label>Location <input name=\"location\" maxlength=\"24\"></label><label>Position <select name=\"position\">"
         + "<option>bottom-left</option><option>bottom-right</option><option>top-left</option><option>top-right</option></select></label>"
         + "<label>Text size <input name=\"text_size\" type=\"number\" min=\"10\" max=\"96\"></label>"
-        + "<label>Fields <input name=\"fields\" maxlength=\"32\"></label><label>JPEG size <select name=\"jpeg_size\"></select></label>"
-        + "<label>Target FPS <input name=\"target_fps\" type=\"number\" min=\"0.1\" max=\"5.0\" step=\"0.1\"></label>"
+        + "<label>Fields <input name=\"fields\" maxlength=\"32\"></label><label>Text color <select name=\"text_color\"><option>green</option></select></label>"
+        + "<label>JPEG size <select name=\"jpeg_size\"></select></label>"
+        + "<label>Target FPS <input name=\"target_fps\" type=\"number\" min=\"0.1\" max=\"3.0\" step=\"0.1\"></label>"
         + "<button type=\"submit\">Save settings</button></form><pre id=\"result\" aria-live=\"polite\"></pre></section>"
         + "<img src=\"/stream.mjpg\" alt=\"Live camera stream\">"
         + "<p>Read-only viewer. Frames appear only when the camera publishes a new image. Settings require the device-admin token.</p>"
         + "<script nonce=\"__NONCE__\">(()=>{let token='';const $=id=>document.getElementById(id),form=$('form'),result=$('result');"
         + "$('settings-button').onclick=()=>{$('settings').hidden=!$('settings').hidden};"
         + "$('clear').onclick=()=>{token='';$('token').value='';form.hidden=true;result.textContent='Token forgotten from memory.'};"
-        + "async function api(path,method='GET',body){const r=await fetch(path,{method,headers:{'Authorization':'Bearer '+token,...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},body});"
+        + "async function api(path,method='GET',body){const r=await fetch(path,{method,mode:'same-origin',credentials:'omit',cache:'no-store',headers:{'Authorization':'Bearer '+token,...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},body});"
         + "const data=await r.json();if(!r.ok)throw Error(data.error||('HTTP '+r.status));return data}"
         + "$('load').onclick=async()=>{token=$('token').value;try{const [c,k]=await Promise.all([api('/api/config'),api('/api/capabilities')]);"
         + "const s=c.settings;for(const e of form.elements)if(e.name&&s[e.name]!==undefined)e.value=s[e.name];"
-        + "const size=form.elements.jpeg_size;size.replaceChildren();for(const x of k.sizes){const o=document.createElement('option');o.value=x.size;o.textContent=x.size+' — estimate '+(x.estimate_fps||'unknown')+' FPS, app cap '+x.application_cap_fps+' FPS';size.append(o)}"
+        + "const size=form.elements.jpeg_size;size.replaceChildren();const a=new Option('auto — nearest to 1280x720 ('+k.auto_size+')','auto');a.disabled=!k.auto_supported;size.append(a);"
+        + "for(const x of k.sizes){const o=document.createElement('option');o.value=x.size;o.disabled=!x.application_supported;o.textContent=x.size+(x.application_supported?'':' (not app-supported)')+' — min '+(x.min_frame_duration_ns??'unknown')+' ns, stall '+(x.jpeg_stall_duration_ns??'unknown')+' ns; estimate '+x.estimate_fps+' FPS, app cap '+x.application_cap_fps+' FPS';size.append(o)}"
         + "if(!Array.from(size.options).some(o=>o.value===s.jpeg_size))size.add(new Option(s.jpeg_size+' (unsupported)',s.jpeg_size));size.value=s.jpeg_size;"
-        + "form.hidden=false;result.textContent='Requested FPS: '+s.target_fps+'; measured FPS: '+(c.measured_fps||'n/a')+'; effective size: '+(c.effective_size||'n/a')+'; '+(c.reload_error||'')"
-        + "}catch(e){token='';form.hidden=true;result.textContent='Could not load settings: '+e.message}};"
+        + "form.hidden=false;result.textContent='Requested FPS: '+s.target_fps+'; effective target: '+c.effective_target_fps+'; metadata estimate: '+c.metadata_estimate_fps+'; application cap: '+c.application_cap_fps+'; measured FPS: '+c.measured_fps+'; desired size: '+c.desired_size+'; effective size: '+c.effective_size+'; '+(c.reload_error||'')"
+        + "}catch(e){token='';$('token').value='';form.hidden=true;result.textContent='Could not load settings: '+e.message}};"
         + "form.onsubmit=async e=>{e.preventDefault();const p=new URLSearchParams(new FormData(form));try{const c=await api('/api/config','PUT',p.toString());"
-        + "result.textContent='Saved atomically. Requested FPS: '+c.settings.target_fps+'; selected size: '+c.effective_size+'; measured FPS: '+(c.measured_fps||'n/a')+'; reload: '+(c.reload_error||'next frame/session)';"
+        + "result.textContent='Saved atomically. Requested FPS: '+c.settings.target_fps+'; effective target: '+c.effective_target_fps+'; metadata estimate: '+c.metadata_estimate_fps+'; application cap: '+c.application_cap_fps+'; measured FPS: '+c.measured_fps+'; desired size: '+c.desired_size+'; effective size: '+c.effective_size+'; reload: '+(c.reload_error||'next frame/session');"
         + "}catch(e){result.textContent='Not saved: '+e.message}}})()</script></body></html>\n";
 
     public interface AdminApi {
@@ -258,9 +261,10 @@ public final class SnapshotHttpServer {
 
         void rejectBusy(Socket client) throws IOException {
             byte[] body = bytes("Too many connections.\n");
-            String header = "HTTP/1.1 503 Service Unavailable\r\nServer: ObservatoryNative/0.3\r\nContent-Type: text/plain\r\nContent-Length: "
-                + body.length + "\r\nCache-Control: no-store\r\nRetry-After: 2\r\nConnection: close\r\n\r\n";
             OutputStream out = client.getOutputStream();
+            String header = "HTTP/1.1 503 Service Unavailable\r\nServer: ObservatoryNative/0.3\r\nContent-Type: text/plain\r\nContent-Length: "
+                + body.length + "\r\nCache-Control: no-store\r\nRetry-After: 2\r\n" + securityHeaders("")
+                + "Connection: close\r\n\r\n";
             out.write(header.getBytes(StandardCharsets.US_ASCII));
             out.write(body);
             out.flush();
@@ -360,8 +364,7 @@ public final class SnapshotHttpServer {
                 }
             }
             String host = headers.get("host");
-            int localPort = listener.getLocalPort();
-            if (host == null || !validAuthority(host, localPort)) {
+            if (host == null || !validAuthority(host)) {
                 reply(conn, output, 400, "Bad Request", "text/plain", bytes("Invalid Host.\n"), false);
                 return;
             }
@@ -372,7 +375,7 @@ public final class SnapshotHttpServer {
             }
             String path = parts[1].split("\\?", 2)[0];
             if (path.startsWith("/api/")) {
-                handleApi(conn, output, parts[0], path, headers, host);
+                handleApi(conn, output, parts[0], path, headers, host, deadline);
                 return;
             }
             if (!parts[0].equals("GET") && !head) {
@@ -387,7 +390,8 @@ public final class SnapshotHttpServer {
                 String nonce = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(nonceBytes);
                 String viewer = VIEWER.replace("__NONCE__", nonce);
                 reply(conn, output, 200, "OK", "text/html; charset=utf-8", bytes(viewer), head,
-                    securityHeaders("default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-" + nonce + "'"));
+                    "default-src 'none'; img-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-"
+                        + nonce + "'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'");
             } else if (path.equals("/stream.mjpg")) {
                 serveStream(conn, input, output, head);
             } else {
@@ -395,26 +399,27 @@ public final class SnapshotHttpServer {
             }
         }
 
-        private boolean validAuthority(String authority, int localPort) {
+        private boolean validAuthority(String authority) {
             try {
                 URI uri = new URI("http://" + authority);
                 String host = uri.getHost();
                 if (host == null || uri.getRawUserInfo() != null || uri.getRawPath().length() != 0
                     || uri.getRawQuery() != null || uri.getRawFragment() != null
-                    || uri.getPort() != localPort || !isIpv4(host)) return false;
+                    || uri.getPort() < 1 || uri.getPort() > 65535 || !isIpv4(host)) return false;
                 return true;
             } catch (URISyntaxException | RuntimeException e) {
                 return false;
             }
         }
 
-        private boolean sameOrigin(String origin, String host, int localPort) {
+        private boolean sameOrigin(String origin, String host) {
             try {
                 URI uri = new URI(origin);
+                URI authority = new URI("http://" + host);
                 return "http".equals(uri.getScheme()) && uri.getRawUserInfo() == null
                     && uri.getRawPath().isEmpty() && uri.getRawQuery() == null && uri.getRawFragment() == null
-                    && uri.getPort() == localPort && isIpv4(uri.getHost())
-                    && ("http://" + uri.getHost() + ":" + uri.getPort()).equalsIgnoreCase("http://" + new URI("http://" + host).getHost() + ":" + localPort);
+                    && uri.getPort() == authority.getPort() && isIpv4(uri.getHost())
+                    && uri.getHost().equalsIgnoreCase(authority.getHost());
             } catch (URISyntaxException | RuntimeException e) {
                 return false;
             }
@@ -434,15 +439,15 @@ public final class SnapshotHttpServer {
         }
 
         private void handleApi(Conn conn, OutputStream output, String method, String path,
-                              Map<String, String> headers, String host) throws IOException {
+                              Map<String, String> headers, String host, long requestDeadline) throws IOException {
             if (!method.equals("GET") && !method.equals("PUT")) {
                 reply(conn, output, 405, "Method Not Allowed", "application/json; charset=utf-8",
-                    bytes("{\"error\":\"method-not-allowed\"}"), false, securityHeaders(""));
+                    bytes("{\"error\":\"method-not-allowed\"}"), false, "");
                 return;
             }
             if (tokenStore == null || adminApi == null || tokenStore.read() == null) {
                 reply(conn, output, 503, "Service Unavailable", "application/json; charset=utf-8",
-                    bytes("{\"error\":\"admin-token-unavailable\"}"), false, securityHeaders(""));
+                    bytes("{\"error\":\"admin-token-unavailable\"}"), false, "");
                 return;
             }
             String authorization = headers.get("authorization");
@@ -450,16 +455,15 @@ public final class SnapshotHttpServer {
                 || !tokenStore.matches(authorization.substring(7))) {
                 reply(conn, output, 401, "Unauthorized", "application/json; charset=utf-8",
                     bytes("{\"error\":\"unauthorized\"}"), false,
-                    securityHeaders(""));
+                    "");
                 return;
             }
-            int localPort = listener.getLocalPort();
             String origin = headers.get("origin");
-            if ((origin != null && !sameOrigin(origin, host, localPort))
-                || (method.equals("PUT") && (origin == null || !sameOrigin(origin, host, localPort)
+            if ((origin != null && !sameOrigin(origin, host))
+                || (method.equals("PUT") && (origin == null || !sameOrigin(origin, host)
                     || "cross-site".equalsIgnoreCase(headers.get("sec-fetch-site"))))) {
                 reply(conn, output, 403, "Forbidden", "application/json; charset=utf-8",
-                    bytes("{\"error\":\"same-origin-required\"}"), false, securityHeaders(""));
+                    bytes("{\"error\":\"same-origin-required\"}"), false, "");
                 return;
             }
             byte[] body = new byte[0];
@@ -468,26 +472,25 @@ public final class SnapshotHttpServer {
                 if (headers.containsKey("transfer-encoding") || lengthValue == null
                     || !lengthValue.matches("[0-9]{1,5}")) {
                     reply(conn, output, 400, "Bad Request", "application/json; charset=utf-8",
-                        bytes("{\"error\":\"content-length-required\"}"), false, securityHeaders(""));
+                        bytes("{\"error\":\"content-length-required\"}"), false, "");
                     return;
                 }
                 int length = Integer.parseInt(lengthValue);
                 if (length > 4096) {
                     reply(conn, output, 413, "Content Too Large", "application/json; charset=utf-8",
-                        bytes("{\"error\":\"body-too-large\"}"), false, securityHeaders(""));
+                        bytes("{\"error\":\"body-too-large\"}"), false, "");
                     return;
                 }
                 if (!"application/x-www-form-urlencoded".equalsIgnoreCase(headers.get("content-type"))) {
                     reply(conn, output, 415, "Unsupported Media Type", "application/json; charset=utf-8",
-                        bytes("{\"error\":\"form-urlencoded-required\"}"), false, securityHeaders(""));
+                        bytes("{\"error\":\"form-urlencoded-required\"}"), false, "");
                     return;
                 }
                 body = new byte[length];
-                long bodyDeadline = System.nanoTime() + 5000000000L;
                 int offset = 0;
                 while (offset < length) {
-                    long remaining = bodyDeadline - System.nanoTime();
-                    if (remaining <= 0) throw new SocketTimeoutException("Body deadline exceeded.");
+                    long remaining = requestDeadline - System.nanoTime();
+                    if (remaining <= 0) throw new SocketTimeoutException("Request deadline exceeded.");
                     conn.socket.setSoTimeout((int) Math.max(1, remaining / 1000000L));
                     int count = conn.socket.getInputStream().read(body, offset, length - offset);
                     if (count < 0) throw new IOException("Incomplete request body.");
@@ -495,12 +498,12 @@ public final class SnapshotHttpServer {
                 }
             } else if (headers.containsKey("content-length") || headers.containsKey("transfer-encoding")) {
                 reply(conn, output, 400, "Bad Request", "application/json; charset=utf-8",
-                    bytes("{\"error\":\"unexpected-request-body\"}"), false, securityHeaders(""));
+                    bytes("{\"error\":\"unexpected-request-body\"}"), false, "");
                 return;
             }
             ApiResult result = adminApi.handle(method, path, body);
             reply(conn, output, result.status, result.reason, "application/json; charset=utf-8",
-                result.body, false, securityHeaders(""));
+                result.body, false, "");
         }
 
         void serveSnapshot(Conn conn, OutputStream output, boolean head, String method) throws IOException {
@@ -602,10 +605,12 @@ public final class SnapshotHttpServer {
     private static byte[] bytes(String text) { return text.getBytes(StandardCharsets.UTF_8); }
 
     private static String securityHeaders(String csp) {
+        String policy = csp.isEmpty()
+            ? "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" : csp;
         return "X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\n"
             + "Permissions-Policy: camera=(), microphone=(), geolocation=()\r\n"
             + "Cross-Origin-Resource-Policy: same-origin\r\n"
-            + (csp.isEmpty() ? "" : "Content-Security-Policy: " + csp + "\r\n");
+            + "Content-Security-Policy: " + policy + "\r\n";
     }
 
     private void reply(Session.Conn conn, OutputStream output, int code, String reason, String type, byte[] body, boolean head) throws IOException {
@@ -613,7 +618,7 @@ public final class SnapshotHttpServer {
     }
 
     private void reply(Session.Conn conn, OutputStream output, int code, String reason, String type, byte[] body, boolean head, String extra) throws IOException {
-        String header = "HTTP/1.1 " + code + " " + reason + "\r\nServer: ObservatoryNative/0.3\r\nContent-Type: " + type + "\r\nContent-Length: " + body.length + "\r\nCache-Control: no-store\r\n" + securityHeaders("") + extra + "Allow: GET, HEAD, PUT\r\nConnection: close\r\n\r\n";
+        String header = "HTTP/1.1 " + code + " " + reason + "\r\nServer: ObservatoryNative/0.3\r\nContent-Type: " + type + "\r\nContent-Length: " + body.length + "\r\nCache-Control: no-store\r\n" + securityHeaders(extra) + "Allow: GET, HEAD, PUT\r\nConnection: close\r\n\r\n";
         conn.write(output, header.getBytes(StandardCharsets.US_ASCII));
         if (!head) conn.write(output, body);
     }

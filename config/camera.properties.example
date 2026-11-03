@@ -27,11 +27,12 @@ fields=location,datetime,fps,frames
 
 # JPEG output size: auto preserves the previous nearest-to-1280x720 selection,
 # or choose an exact size advertised by the selected camera, e.g. 1920x1080.
-# Only Camera2 JPEG output sizes are available. Default: auto
+# Only Camera2 JPEG outputs up to the app's 8-megapixel limit are selectable.
+# Default: auto
 jpeg_size=auto
 
-# Capture target in frames per second, 0.1-5.0 with one decimal. Default: 1.0
-# 5 FPS is the conservative application limit; selected-camera metadata may
+# Capture target in frames per second, 0.1-3.0 with one decimal. Default: 1.0
+# 3 FPS is the conservative application limit; selected-camera metadata may
 # impose a lower validation limit. Neither is a throughput guarantee; check
 # measured FPS and processing costs.
 target_fps=1.0

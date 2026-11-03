@@ -90,7 +90,7 @@ public final class SnapshotHttpService extends Service {
             return;
         }
         manager.notify(NOTIFICATION_ID, buildNotification("Listening on port " + server.getLocalPort()
-            + ". No authentication or TLS: trusted LAN only."));
+            + ". Plaintext HTTP; viewer is public: trusted LAN only."));
         setState(true, null);
         Log.i(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "start", "listening", "port=" + server.getLocalPort()));
     }

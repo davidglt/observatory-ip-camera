@@ -22,7 +22,9 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
             if (path.equals("/api/config") && method.equals("GET"))
                 return ok(configJson(CaptureSettings.store(context).load().config, null));
             if (path.equals("/api/config") && method.equals("PUT")) {
-                Map<String, String> values = decodeForm(body);
+                Map<String, String> values;
+                try { values = decodeForm(body); }
+                catch (IllegalArgumentException | CharacterCodingException e) { return bad("invalid-form"); }
                 CameraCapabilities caps = cameraCapabilities();
                 ConfigStore.Outcome saved = CaptureSettings.store(context).updateEntries(values, caps::validate);
                 if (saved.config == null) return bad(saved.error);
@@ -54,6 +56,7 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
         ContinuousStatus status = ContinuousCaptureService.getStatus();
         out.append("},\"effective_size\":\"").append(json(ContinuousCaptureService.effectiveJpegSize()))
             .append("\",\"desired_size\":\"").append(json(config.jpegSize))
+            .append("\",\"effective_target_fps\":\"").append(json(ContinuousCaptureService.effectiveTargetFps()))
             .append("\",\"measured_fps\":\"")
             .append(Double.isNaN(status.fps) ? "n/a" : String.format(java.util.Locale.ROOT, "%.2f", status.fps))
             .append("\",\"metadata_estimate_fps\":\"").append(json(ContinuousCaptureService.metadataEstimateFps()))
@@ -70,20 +73,29 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
     }
 
     private String capabilitiesJson(CameraCapabilities capabilities) {
-        StringBuilder out = new StringBuilder("{\"application_limit_fps\":\"5.0\",\"sizes\":[");
+        CaptureConfig automatic = CaptureConfig.defaults();
+        CameraCapabilities.JpegSize autoSize = capabilities.select(automatic);
+        boolean autoSupported = (long) autoSize.width * autoSize.height <= CameraCapabilities.MAX_JPEG_PIXELS
+            && capabilities.applicationCapFpsTenths(automatic) >= CaptureConfig.MIN_FPS_TENTHS;
+        StringBuilder out = new StringBuilder("{\"application_limit_fps\":\"3.0\",\"auto_size\":\"")
+            .append(autoSize.value()).append("\",\"auto_supported\":").append(autoSupported).append(",\"sizes\":[");
         boolean first = true;
         for (CameraCapabilities.JpegSize size : capabilities.sizes()) {
             if (!first) out.append(',');
             first = false;
             int estimate = size.metadataEstimateFpsTenths();
-            int cap = capabilities.applicationCapFpsTenths(new CaptureConfigForSize(size.value()).config());
+            CaptureConfig sizeConfig = new CaptureConfigForSize(size.value()).config();
+            int cap = capabilities.applicationCapFpsTenths(sizeConfig);
+            boolean supported = (long) size.width * size.height <= CameraCapabilities.MAX_JPEG_PIXELS
+                && cap >= CaptureConfig.MIN_FPS_TENTHS;
             out.append("{\"size\":\"").append(size.value())
-                .append("\",\"min_frame_duration_ns\":")
+                .append("\",\"application_supported\":").append(supported)
+                .append(",\"min_frame_duration_ns\":")
                 .append(size.minFrameDurationNanos > 0 ? Long.toString(size.minFrameDurationNanos) : "null")
                 .append(",\"jpeg_stall_duration_ns\":")
                 .append(size.stallDurationNanos >= 0 ? Long.toString(size.stallDurationNanos) : "null")
                 .append(",\"estimate_fps\":\"").append(size.hasTimingEstimate() ? CameraCapabilities.formatFps(estimate) : "unknown")
-                .append("\",\"application_cap_fps\":\"").append(CameraCapabilities.formatFps(cap)).append("\"}");
+                .append("\",\"application_cap_fps\":\"").append(supported ? CameraCapabilities.formatFps(cap) : "unsupported").append("\"}");
         }
         return out.append("]}").toString();
     }

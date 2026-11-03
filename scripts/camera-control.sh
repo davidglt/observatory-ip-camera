@@ -33,7 +33,7 @@ Subcommands:
   continuous-status  state, session frames, measured FPS, last capture time/age, processing diagnostics
   config-show        show the persistent capture/overlay settings
   config-set K=V ... validate and save settings atomically (overlay=on|off location=NAME position=bottom-left|bottom-right|top-left|top-right
-                     text_size=10-96 fields=location,datetime,fps,frames jpeg_size=auto|WIDTHxHEIGHT target_fps=0.1-5.0); applied from the next frame/session
+                     text_size=10-96 fields=location,datetime,fps,frames jpeg_size=auto|WIDTHxHEIGHT target_fps=0.1-3.0); applied from the next frame/session
   config-reset       restore default settings
   config-export --out FILE   save the live camera.properties (normalized) to FILE on this host
   config-import --in FILE    upload FILE, validate it completely on the device, then replace the live settings

@@ -35,7 +35,7 @@ public final class CaptureConfig {
     public static final int MIN_TEXT_SIZE = 10;
     public static final int MAX_TEXT_SIZE = 96;
     public static final int MIN_FPS_TENTHS = 1;
-    public static final int MAX_FPS_TENTHS = 50;
+    public static final int MAX_FPS_TENTHS = 30;
     public static final int MAX_ASSIGNMENTS_LENGTH = 200;
     private static final Pattern LOCATION_PATTERN = Pattern.compile("[\\p{L}\\p{N}_.-]([\\p{L}\\p{N} _.-]*[\\p{L}\\p{N}_.-])?");
     private static final Pattern FPS_PATTERN = Pattern.compile("[0-9](\\.[0-9])?");
@@ -119,7 +119,7 @@ public final class CaptureConfig {
             }
             case TARGET_FPS: {
                 int tenths = parseFpsTenths(value);
-                if (tenths < MIN_FPS_TENTHS || tenths > MAX_FPS_TENTHS) return "invalid-target_fps:expected-0.1-to-5.0";
+                if (tenths < MIN_FPS_TENTHS || tenths > MAX_FPS_TENTHS) return "invalid-target_fps:expected-0.1-to-3.0";
                 d.fps = tenths;
                 return null;
             }

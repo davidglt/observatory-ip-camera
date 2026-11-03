@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 P=local/termux/observatorycamera
- javac --release 8 -d "$OUT" src/$P/JpegOrientation.java src/$P/SnapshotHttpServer.java src/$P/AdminTokenStore.java src/$P/ControlCommand.java src/$P/CaptureConfig.java src/$P/CameraCapabilities.java src/$P/ConfigStore.java src/$P/OverlayFormat.java src/$P/OverlayLayout.java src/$P/ExifOrientation.java src/$P/FrameStats.java src/$P/ContinuousStatus.java src/$P/CameraArbiter.java src/$P/SnapshotPublisher.java test/$P/JpegOrientationTest.java test/$P/ControlCommandTest.java test/$P/SnapshotHttpServerTest.java test/$P/SnapshotStreamTest.java test/$P/CaptureConfigTest.java test/$P/CameraCapabilitiesTest.java test/$P/AdminTokenStoreTest.java test/$P/ConfigStoreTest.java test/$P/OverlayTest.java test/$P/ContinuousStatsTest.java
+javac --release 8 -d "$OUT" src/$P/JpegOrientation.java src/$P/SnapshotHttpServer.java src/$P/AdminTokenStore.java src/$P/ControlCommand.java src/$P/CaptureConfig.java src/$P/CameraCapabilities.java src/$P/ConfigStore.java src/$P/OverlayFormat.java src/$P/OverlayLayout.java src/$P/ExifOrientation.java src/$P/FrameStats.java src/$P/ContinuousStatus.java src/$P/CameraArbiter.java src/$P/SnapshotPublisher.java test/$P/JpegOrientationTest.java test/$P/ControlCommandTest.java test/$P/SnapshotHttpServerTest.java test/$P/SnapshotStreamTest.java test/$P/CaptureConfigTest.java test/$P/CameraCapabilitiesTest.java test/$P/AdminTokenStoreTest.java test/$P/ConfigStoreTest.java test/$P/OverlayTest.java test/$P/ContinuousStatsTest.java
 run_java() {
     echo "Running Java subtest: $1"
     timeout -k 5 120 java -cp "$OUT" "local.termux.observatorycamera.$1"

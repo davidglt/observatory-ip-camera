@@ -65,12 +65,14 @@ public final class ContinuousCaptureService extends Service {
     private static volatile ContinuousStatus status = ContinuousStatus.stopped();
     private static volatile Listener listener;
     private static volatile String effectiveJpegSize = "n/a";
+    private static volatile String effectiveTargetFps = "n/a";
     private static volatile String metadataEstimateFps = "unknown";
-    private static volatile String applicationCapFps = "5.0";
+    private static volatile String applicationCapFps = "3.0";
     private static volatile String reloadError;
 
     public static ContinuousStatus getStatus() { return status; }
     public static String effectiveJpegSize() { return effectiveJpegSize; }
+    public static String effectiveTargetFps() { return effectiveTargetFps; }
     public static String metadataEstimateFps() { return metadataEstimateFps; }
     public static String applicationCapFps() { return applicationCapFps; }
     public static String reloadError() { return reloadError; }
@@ -161,8 +163,9 @@ public final class ContinuousCaptureService extends Service {
         overlayMode = "-";
         reloadError = null;
         effectiveJpegSize = "unknown";
+        effectiveTargetFps = "unknown";
         metadataEstimateFps = "unknown";
-        applicationCapFps = "5.0";
+        applicationCapFps = "3.0";
         lastAngle = -1;
         publish(snapshot(ContinuousStatus.STARTING, null), true);
         try {
@@ -245,6 +248,7 @@ public final class ContinuousCaptureService extends Service {
                     effectiveSize = configuredSize;
                     activeConfig = configuredConfig;
                     effectiveJpegSize = configuredSize.value();
+                    effectiveTargetFps = configuredConfig.targetFpsString();
                     int estimate = configuredSize.metadataEstimateFpsTenths();
                     metadataEstimateFps = configuredSize.hasTimingEstimate() ? CameraCapabilities.formatFps(estimate) : "unknown";
                     applicationCapFps = CameraCapabilities.formatFps(capabilities.applicationCapFpsTenths(
@@ -319,6 +323,7 @@ public final class ContinuousCaptureService extends Service {
             return;
         }
         activeConfig = requested;
+        effectiveTargetFps = requested.targetFpsString();
         if (effectiveSize != null) {
             int estimate = effectiveSize.metadataEstimateFpsTenths();
             metadataEstimateFps = effectiveSize.hasTimingEstimate() ? CameraCapabilities.formatFps(estimate) : "unknown";
@@ -376,20 +381,26 @@ public final class ContinuousCaptureService extends Service {
 
     /** Processing thread. Copies and closes the image immediately, then decodes/draws/writes. */
     private void onImageAvailable(ImageReader source, int gen) {
+        Handler handler = cameraHandler;
+        if (gen != generation || !open || handler == null) return;
         long acquired = SystemClock.elapsedRealtimeNanos();
         long wall = System.currentTimeMillis();
         String zone = TimeZone.getDefault().getID();
+        final long id = serial;
         byte[] data;
         try (Image image = source.acquireNextImage()) {
             if (image == null) return;
             ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+            if (buffer.remaining() > CameraCapabilities.MAX_JPEG_BYTES) {
+                handler.post(() -> frameFailed(gen, id, "JPEG exceeds the application byte limit."));
+                return;
+            }
             data = new byte[buffer.remaining()];
             buffer.get(data);
         } catch (RuntimeException e) {
             Log.w(TAG, "Image acquire failed: " + e);
             return;
         }
-        final long id = serial;
         if (gen != generation) return;
         if (!inFlight) {
             Log.w(TAG, "Discarded an unexpected frame (no capture in flight); stale frames are never published.");
@@ -400,6 +411,7 @@ public final class ContinuousCaptureService extends Service {
             if (capabilities != null && capabilities.validate(config) != null) config = activeConfig;
             int number = (int) Math.min(Integer.MAX_VALUE, stats.frames() + 1);
             FrameOverlay.Result r = FrameOverlay.process(data, config, stats.fpsWith(acquired), number, wall, TimeZone.getTimeZone(zone));
+            if (r.jpeg.length > CameraCapabilities.MAX_JPEG_BYTES) throw new IOException("JPEG output exceeds the application byte limit.");
             boolean published = SnapshotPublisher.publish(getFilesDir(), "snapshot.jpg", r.jpeg, () -> gen == generation);
             if (!published) return;
             stats.recordFrame(acquired, r.processingNanos);
@@ -407,9 +419,9 @@ public final class ContinuousCaptureService extends Service {
             overlayMode = r.rendered ? "rendered" : "passthrough";
             publishFrame(wall, zone);
             Log.i(TAG, "Frame " + stats.frames() + " published, " + r.jpeg.length + " bytes, overlay=" + overlayMode + ", processing " + r.processingNanos / 1_000_000L + " ms.");
-            cameraHandler.post(() -> cycleDone(gen, id, true));
+            handler.post(() -> cycleDone(gen, id, true));
         } catch (Exception e) {
-            cameraHandler.post(() -> frameFailed(gen, id, "Frame processing failed: " + e));
+            handler.post(() -> frameFailed(gen, id, "Frame processing failed: " + e));
         }
     }
 

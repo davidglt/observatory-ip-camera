@@ -7,7 +7,9 @@ import java.util.List;
 
 /** Immutable Camera2 JPEG-output metadata and conservative application validation. */
 public final class CameraCapabilities {
-    public static final int APPLICATION_MAX_FPS_TENTHS = 50;
+    public static final int APPLICATION_MAX_FPS_TENTHS = 30;
+    public static final long MAX_JPEG_PIXELS = 8_000_000L;
+    public static final int MAX_JPEG_BYTES = 16 * 1024 * 1024;
     private static final long DEFAULT_PIXELS = 1280L * 720L;
 
     public static final class JpegSize {
@@ -68,7 +70,7 @@ public final class CameraCapabilities {
 
     public int applicationCapFpsTenths(CaptureConfig config) {
         JpegSize selected = select(config);
-        if (selected == null) return 0;
+        if (selected == null || (long) selected.width * selected.height > MAX_JPEG_PIXELS) return 0;
         int estimate = selected.metadataEstimateFpsTenths();
         return !selected.hasTimingEstimate() ? APPLICATION_MAX_FPS_TENTHS
             : Math.min(APPLICATION_MAX_FPS_TENTHS, estimate);
@@ -77,6 +79,8 @@ public final class CameraCapabilities {
     public String validate(CaptureConfig config) {
         JpegSize selected = select(config);
         if (selected == null) return "unsupported-jpeg_size:" + config.jpegSize;
+        if ((long) selected.width * selected.height > MAX_JPEG_PIXELS)
+            return "unsupported-jpeg_size:application-limit-" + MAX_JPEG_PIXELS + "-pixels";
         int cap = applicationCapFpsTenths(config);
         if (config.targetFpsTenths > cap)
             return "unsupported-target_fps:max-" + formatFps(cap) + "-for-" + selected.value();

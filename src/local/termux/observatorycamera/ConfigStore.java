@@ -110,7 +110,15 @@ final class ConfigStore {
     }
 
     Outcome reset() {
-        synchronized (LOCK) { return save(CaptureConfig.defaults()); }
+        return reset(NO_VALIDATION);
+    }
+
+    Outcome reset(Validator validator) {
+        synchronized (LOCK) {
+            CaptureConfig defaults = CaptureConfig.defaults();
+            String error = validator.validate(defaults);
+            return error == null ? save(defaults) : new Outcome(null, error);
+        }
     }
 
     /** Writes the effective configuration (normalized) so the live file exists and is valid, e.g. before an export. */

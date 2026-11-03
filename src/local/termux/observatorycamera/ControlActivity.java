@@ -162,9 +162,12 @@ public final class ControlActivity extends Activity {
 
     private void continuousStatus(ControlCommand command) {
         boolean camera = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+        CaptureConfig requested = CaptureSettings.load(this);
         Log.i(TAG, ControlCommand.line(command.requestId, command.name, "continuous-status",
             ContinuousCaptureService.getStatus().describe(SystemClock.elapsedRealtimeNanos())
-            + " desired_size=" + CaptureSettings.load(this).jpegSize
+            + " requested_fps=" + requested.targetFpsString()
+            + " effective_target_fps=" + ContinuousCaptureService.effectiveTargetFps()
+            + " desired_size=" + requested.jpegSize
             + " effective_size=" + ContinuousCaptureService.effectiveJpegSize()
             + " metadata_estimate_fps=" + ContinuousCaptureService.metadataEstimateFps()
             + " application_cap_fps=" + ContinuousCaptureService.applicationCapFps()
@@ -181,7 +184,7 @@ public final class ControlActivity extends Activity {
 
     private void configSet(ControlCommand command) { configOutcome(command, CaptureSettings.store(this).update(command.config, this::validateConfig)); }
 
-    private void configReset(ControlCommand command) { configOutcome(command, CaptureSettings.store(this).reset()); }
+    private void configReset(ControlCommand command) { configOutcome(command, CaptureSettings.store(this).reset(this::validateConfig)); }
 
     /** Logs the saved configuration, or the rejection (the previous configuration is then unchanged). */
     private void configOutcome(ControlCommand command, ConfigStore.Outcome outcome) {
