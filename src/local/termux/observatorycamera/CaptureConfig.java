@@ -23,6 +23,7 @@ public final class CaptureConfig {
     public static final String JPEG_SIZE = "jpeg_size";
     public static final String TEXT_COLOR = "text_color";
     public static final String TEXT_COLOR_GREEN = "green";
+    public static final String TELEMETRY_POSITION = "telemetry_position";
     public static final String PANEL_ENABLED = "panel_enabled";
     public static final String PANEL_TEXT_COLOR = "panel_text_color";
     public static final String PANEL_BACKGROUND_COLOR = "panel_background_color";
@@ -71,6 +72,8 @@ public final class CaptureConfig {
     public final int fields;
     public final long targetFpsTenths;
     public final String jpegSize;
+    public final String textColor;
+    public final String telemetryPosition;
     public final boolean panelEnabled;
     public final String panelTextColor;
     public final String panelBackgroundColor;
@@ -85,7 +88,8 @@ public final class CaptureConfig {
     public final int mqttStaleSeconds;
 
     private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields,
-                          long targetFpsTenths, String jpegSize, boolean panelEnabled, String panelTextColor,
+                          long targetFpsTenths, String jpegSize, String textColor, String telemetryPosition,
+                          boolean panelEnabled, String panelTextColor,
                           String panelBackgroundColor, int panelTextSize, boolean panelEnvironment,
                           boolean panelDevice, boolean panelCapture, String mqttHost, int mqttPort,
                           String mqttTopic, boolean mqttTls, int mqttStaleSeconds) {
@@ -96,6 +100,8 @@ public final class CaptureConfig {
         this.fields = fields;
         this.targetFpsTenths = targetFpsTenths;
         this.jpegSize = jpegSize;
+        this.textColor = textColor;
+        this.telemetryPosition = telemetryPosition;
         this.panelEnabled = panelEnabled;
         this.panelTextColor = panelTextColor;
         this.panelBackgroundColor = panelBackgroundColor;
@@ -113,7 +119,7 @@ public final class CaptureConfig {
     /** Conservative defaults: overlay on, NYX, bottom-left, size 24 (at 720 px short side), all visible fields, 1.0 FPS target. */
     public static CaptureConfig defaults() {
         return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10, "auto",
-            true, "#ff0000", "#000000", 16, true, true, true,
+            TEXT_COLOR_GREEN, "right", true, "#FF0000", "#000000", 16, true, true, true,
             "", 1883, "homeassistant/nyx/reading", false, 120);
     }
 
@@ -133,6 +139,8 @@ public final class CaptureConfig {
         int fields;
         long fps;
         String jpegSize;
+        String textColor;
+        String telemetryPosition;
         boolean panelEnabled;
         String panelTextColor;
         String panelBackgroundColor;
@@ -148,6 +156,7 @@ public final class CaptureConfig {
         Draft(CaptureConfig c) {
             overlay = c.overlayEnabled; location = c.location; position = c.position;
             textSize = c.textSize; fields = c.fields; fps = c.targetFpsTenths; jpegSize = c.jpegSize;
+            textColor = c.textColor; telemetryPosition = c.telemetryPosition;
             panelEnabled = c.panelEnabled; panelTextColor = c.panelTextColor;
             panelBackgroundColor = c.panelBackgroundColor; panelTextSize = c.panelTextSize;
             panelEnvironment = c.panelEnvironment; panelDevice = c.panelDevice; panelCapture = c.panelCapture;
@@ -156,7 +165,8 @@ public final class CaptureConfig {
         }
         CaptureConfig build() {
             return new CaptureConfig(overlay, location, position, textSize, fields, fps, jpegSize,
-                panelEnabled, panelTextColor, panelBackgroundColor, panelTextSize, panelEnvironment,
+                textColor, telemetryPosition, panelEnabled, panelTextColor, panelBackgroundColor,
+                panelTextSize, panelEnvironment,
                 panelDevice, panelCapture, mqttHost, mqttPort, mqttTopic, mqttTls, mqttStaleSeconds);
         }
     }
@@ -204,18 +214,29 @@ public final class CaptureConfig {
                 d.jpegSize = value;
                 return null;
             case TEXT_COLOR:
-                return value.equals(TEXT_COLOR_GREEN) ? null : "invalid-text_color:only-green-is-supported";
+                if (value.equals(TEXT_COLOR_GREEN)) {
+                    d.textColor = TEXT_COLOR_GREEN;
+                    return null;
+                }
+                if (!COLOR_PATTERN.matcher(value).matches()) return "invalid-text_color:expected-green-or-#RRGGBB";
+                d.textColor = value.toUpperCase(Locale.ROOT);
+                return null;
+            case TELEMETRY_POSITION:
+                if (!value.equals("left") && !value.equals("right"))
+                    return "invalid-telemetry_position:expected-left-or-right";
+                d.telemetryPosition = value;
+                return null;
             case PANEL_ENABLED:
                 if (!value.equals("on") && !value.equals("off")) return "invalid-panel_enabled:expected-on-or-off";
                 d.panelEnabled = value.equals("on");
                 return null;
             case PANEL_TEXT_COLOR:
                 if (!COLOR_PATTERN.matcher(value).matches()) return "invalid-panel_text_color:expected-hex-color";
-                d.panelTextColor = value.toLowerCase(Locale.ROOT);
+                d.panelTextColor = value.toUpperCase(Locale.ROOT);
                 return null;
             case PANEL_BACKGROUND_COLOR:
                 if (!COLOR_PATTERN.matcher(value).matches()) return "invalid-panel_background_color:expected-hex-color";
-                d.panelBackgroundColor = value.toLowerCase(Locale.ROOT);
+                d.panelBackgroundColor = value.toUpperCase(Locale.ROOT);
                 return null;
             case PANEL_TEXT_SIZE: {
                 int n = parseInt(value);
@@ -320,7 +341,8 @@ public final class CaptureConfig {
         m.put(FIELDS, fieldsString());
         m.put(TARGET_FPS, targetFpsString());
         m.put(JPEG_SIZE, jpegSize);
-        m.put(TEXT_COLOR, TEXT_COLOR_GREEN);
+        m.put(TEXT_COLOR, textColor);
+        m.put(TELEMETRY_POSITION, telemetryPosition);
         m.put(PANEL_ENABLED, panelEnabled ? "on" : "off");
         m.put(PANEL_TEXT_COLOR, panelTextColor);
         m.put(PANEL_BACKGROUND_COLOR, panelBackgroundColor);

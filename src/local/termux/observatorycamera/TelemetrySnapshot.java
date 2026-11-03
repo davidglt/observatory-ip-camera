@@ -79,6 +79,7 @@ final class TelemetrySnapshot {
         add(json, "processing_average_ms", processingAverageMs == null ? "--" : fixed(processingAverageMs, 1));
         add(json, "processing_maximum_ms", processingMaximumMs == null ? "--" : fixed(processingMaximumMs, 1));
         add(json, "panel_enabled", config.panelEnabled ? "true" : "false", false);
+        add(json, "telemetry_position", config.telemetryPosition);
         add(json, "panel_text_color", config.panelTextColor);
         add(json, "panel_background_color", config.panelBackgroundColor);
         add(json, "panel_text_size", Integer.toString(config.panelTextSize), false);

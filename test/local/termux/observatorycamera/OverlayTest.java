@@ -9,6 +9,9 @@ public final class OverlayTest {
 
     public static void main(String[] args) {
         CaptureConfig d = CaptureConfig.defaults();
+        check(OverlayFormat.textColor(d).equals("#00FF00"), "legacy green preserves the existing overlay appearance");
+        check(OverlayFormat.textColor(CaptureConfig.parse("text_color=#12aBcD", d).config).equals("#12ABCD"),
+            "renderer color selection uses the configured canonical RGB value");
         TimeZone utc = TimeZone.getTimeZone("UTC");
         long t = 1_767_225_600_000L; // 2026-01-01T00:00:00Z
         List<String> l = OverlayFormat.lines(d, 4.2, t, utc);

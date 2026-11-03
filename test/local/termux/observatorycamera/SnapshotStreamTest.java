@@ -166,7 +166,8 @@ public final class SnapshotStreamTest {
             check(page.contains("Settings") && page.contains("Authorization") && page.contains("<script nonce=")
                 && !page.contains("localStorage") && !page.contains("sessionStorage"), "viewer has in-memory authenticated settings only");
             check(page.contains("grid-template-columns:repeat(2,minmax(0,1fr))")
-                && page.contains("@media(max-width:800px){#viewer{grid-template-columns:minmax(0,1fr)}}")
+                && page.contains("#viewer[data-telemetry-position=left]{grid-template-columns:260px minmax(0,1fr)")
+                && page.contains("@media(max-width:800px){#viewer,#viewer[data-telemetry-position]{grid-template-columns:minmax(0,1fr);grid-template-areas:'image' 'telemetry'}}")
                 && page.contains("@media(max-width:600px)") && page.contains("grid-template-columns:minmax(0,1fr)")
                 && page.contains("id=\"telemetry\"") && page.contains("setInterval(updateTelemetry,2000)"),
                 "telemetry panel and settings adapt without refreshing the image");

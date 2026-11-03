@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+if ! grep -Eq '<manifest[^>]*android:versionCode="6"[^>]*android:versionName="0\.6\.0"' AndroidManifest.xml; then
+    echo "Release metadata must be versionCode 6 and versionName 0.6.0" >&2
+    exit 1
+fi
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 P=local/termux/observatorycamera

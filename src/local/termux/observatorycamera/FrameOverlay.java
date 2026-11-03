@@ -133,7 +133,7 @@ final class FrameOverlay {
             canvas.drawText(lines.get(i), x, y, paint);
             paint.clearShadowLayer();
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.GREEN);
+            paint.setColor(Color.parseColor(OverlayFormat.textColor(config)));
             canvas.drawText(lines.get(i), x, y, paint);
         }
     }

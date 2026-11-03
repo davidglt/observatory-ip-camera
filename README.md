@@ -2,7 +2,11 @@
 
 Native Java Android camera app developed, compiled and signed in Termux. Source, comments, messages and documentation are in English.
 
-## Status: 0.5.0 (continuous capture, not yet compiled to an APK or device-validated)
+## Status: 0.6.0 (telemetry; device and browser behavior not yet verified)
+
+New in 0.6.0: device and optional BME280 environmental telemetry in a responsive viewer panel and independently configurable JPEG overlays. See "Telemetry" below.
+
+Release versioning: increment `versionCode` for every new release and update `versionName` according to the scope of the change. Do not increment either value for every local rebuild.
 
 New in 0.5.0: sustained Camera2 JPEG capture with a burned-in overlay, controlled only over authorized ADB (see "Continuous capture and overlay" below). Everything below about 0.4.0 still applies.
 
@@ -87,7 +91,7 @@ Sustained JPEG capture runs in ContinuousCaptureService, started and stopped onl
 ```sh
 bash scripts/camera-control.sh -s "$TARGET" setup-permissions       # CAMERA + POST_NOTIFICATIONS, only when you choose
 bash scripts/camera-control.sh -s "$TARGET" config-show
-bash scripts/camera-control.sh -s "$TARGET" config-set overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps jpeg_size=auto target_fps=1
+bash scripts/camera-control.sh -s "$TARGET" config-set overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps jpeg_size=auto target_fps=1 'text_color=#00FF00' telemetry_position=right
 bash scripts/camera-control.sh -s "$TARGET" admin-token-show
 bash scripts/camera-control.sh -s "$TARGET" admin-token-show       # explicitly provision/retrieve token for the browser
 bash scripts/camera-control.sh -s "$TARGET" admin-token-rotate    # invalidate old token and print a new one
@@ -105,7 +109,7 @@ Pipeline: one camera device, one capture session and one ImageReader (maxImages 
 
 Rate: the default requested target is 1 FPS. `target_fps` accepts positive rates with at most one decimal digit, from 0.1 through 922337203685477580.7; the upper bound is the largest value representable as signed 64-bit tenths. Camera2 minimum-frame and JPEG-stall timing metadata is reported as an informational estimate only and never rejects a requested target. A zero/unknown minimum frame duration remains `unknown`; a reported zero JPEG stall duration means no additional stall in that metadata. The estimate excludes processing/publication costs and is not guaranteed sustainable throughput. Captures are serialized: the next capture starts only after the previous frame is processed and published (or fails), so slow hardware or processing produces fewer actual FPS without overlapping captures or catch-up queues/bursts. `continuous-status` and the web Settings panel distinguish the requested target, effective target, metadata estimate and actual FPS. Check actual FPS and `late` cycles on the device. Nanosecond timing arithmetic bottoms out at a 1 ns interval, and Android handler delays have millisecond resolution; these are representation/scheduler bounds, not operational FPS caps. `continuous-status` also reports processing time (last/avg/max ms, bytes, overlay mode), state, frames (successfully published), last_capture/tz and monotonic age. The frame time is when the JPEG is received, so it can trail exposure by camera latency; it is never HTTP retrieval time.
 
-Overlay (default on, burned into the JPEG pixels so snapshot clients and any later MJPEG consumer see it): bottom-left, green bold text with black outline and shadow, margins of 3% of the short side (min 8 px). Default text:
+Overlay (default on, burned into the JPEG pixels so snapshot clients and any later MJPEG consumer see it): bottom-left, bold text with configurable `#RRGGBB` color (or legacy `green`) and a black outline and shadow, margins of 3% of the short side (min 8 px). Missing or legacy `text_color=green` keeps the original green appearance. RGB values accept either case and are persisted in uppercase.
 
 ```
 NYX
@@ -114,7 +118,9 @@ FPS: 0.9 / 1.0
 ```
 NYX is a configurable text label, not GPS; no location permission is used. FPS shows measured actual capture/publication rate followed by the configured target; actual FPS shows `--` until it can be measured. Single capture uses the same overlay with `FPS: -- / 1.0`. The visible-field selection controls Location, Date/time, and FPS; frame counts remain internal diagnostics and are not drawn.
 
-The web viewer has an independent framed telemetry panel outside the image: on wide screens it is at the right, and on narrow screens below the image. It defaults to a black background/red text and independently selectable Environment, Device and Capture groups. Its status polling is read-only and does not request captures or reload the image. `/api/telemetry` is public and bounded like the existing public viewer/snapshot routes; it returns display telemetry and panel appearance only, never broker settings or credentials. The existing config/capability APIs remain bearer-token authenticated.
+The web viewer has an independent framed telemetry panel outside the image: `telemetry_position=left|right` selects its side on wide screens (default right), and on narrow screens it is always below the image. Settings provide editable RGB hex text and synchronized color pickers for the overlay text, panel text, and panel background independently. The panel defaults to a black background/red text and has independently selectable Environment, Device and Capture groups. Its status polling is read-only and does not request captures or reload the image. `/api/telemetry` is public and bounded like the existing public viewer/snapshot routes; it returns display telemetry and panel appearance only, never broker settings or credentials. The existing config/capability APIs remain bearer-token authenticated.
+
+The camera.properties keys `text_color`, `panel_text_color`, `panel_background_color`, and `telemetry_position` use the same validated atomic save/import path as the other settings. For shell commands, quote RGB assignments to keep `#` in the value, for example: `config-set 'text_color=#12ABCD' 'panel_text_color=#FF0000' 'panel_background_color=#000000' telemetry_position=left`. Web Settings, SSH, import/export and reload all share this persisted configuration.
 
 Each overlay field has its own checkbox. New overlay telemetry fields (environmental Temperature, Humidity and Pressure, Battery level/temperature, Charging status and Thermal status) default off, leaving the previously visible Location/Date-time/FPS unchanged for existing files. Panel group selections do not change overlay selections. Environmental values are burned into JPEG pixels only when the source timestamp is fresh; unavailable or stale values are labeled `--`. Thermal status is an Android severity (`none` through `shutdown`), not a CPU temperature. Processing times and server diagnostics are panel-only. All overlay fields may be unchecked and persist as `fields=none`.
 

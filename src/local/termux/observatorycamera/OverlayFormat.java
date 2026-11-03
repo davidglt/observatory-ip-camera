@@ -45,4 +45,8 @@ final class OverlayFormat {
     static String formatFps(double fps) {
         return Double.isNaN(fps) || fps < 0 ? "--" : String.format(Locale.ROOT, "%.1f", fps);
     }
+
+    static String textColor(CaptureConfig config) {
+        return config.textColor.equals(CaptureConfig.TEXT_COLOR_GREEN) ? "#00FF00" : config.textColor;
+    }
 }

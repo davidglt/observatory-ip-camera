@@ -40,12 +40,16 @@ jpeg_size=auto
 # The stored 64-bit tenths representation supports up to 922337203685477580.7.
 target_fps=1.0
 
-# Text colour. Only green (with black outline and shadow) is supported. Default: green
+# Overlay text color: #RRGGBB (case-insensitive, stored uppercase) or legacy green.
+# The legacy green value preserves the existing appearance. A black outline and
+# shadow are retained. Default: green
 text_color=green
 
 # Independent viewer telemetry panel. Default: shown with all groups enabled.
 panel_enabled=on
-panel_text_color=#ff0000
+# left | right. The panel is always below the image on narrow screens. Default: right
+telemetry_position=right
+panel_text_color=#FF0000
 panel_background_color=#000000
 panel_text_size=16
 panel_environment=on
@@ -63,3 +67,7 @@ mqtt_stale_seconds=120
 # MQTT credentials are not stored in or exported with this file. When needed,
 # configure them separately in app-private files/mqtt-credentials.properties.
 # The credential file is never returned by APIs, logs, config-export or config-import.
+
+# When using scripts/camera-control.sh config-set, quote RGB values so the shell
+# passes the leading # as part of the assignment, for example:
+#   config-set 'text_color=#12ABCD' 'panel_text_color=#FF0000'
