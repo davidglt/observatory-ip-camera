@@ -23,21 +23,45 @@ public final class CaptureConfig {
     public static final String JPEG_SIZE = "jpeg_size";
     public static final String TEXT_COLOR = "text_color";
     public static final String TEXT_COLOR_GREEN = "green";
+    public static final String PANEL_ENABLED = "panel_enabled";
+    public static final String PANEL_TEXT_COLOR = "panel_text_color";
+    public static final String PANEL_BACKGROUND_COLOR = "panel_background_color";
+    public static final String PANEL_TEXT_SIZE = "panel_text_size";
+    public static final String PANEL_ENVIRONMENT = "panel_environment";
+    public static final String PANEL_DEVICE = "panel_device";
+    public static final String PANEL_CAPTURE = "panel_capture";
+    public static final String MQTT_HOST = "mqtt_host";
+    public static final String MQTT_PORT = "mqtt_port";
+    public static final String MQTT_TOPIC = "mqtt_topic";
+    public static final String MQTT_TLS = "mqtt_tls";
     public static final int MAX_LOCATION_LENGTH = 24;
 
     public static final int FIELD_LOCATION = 1;
     public static final int FIELD_DATETIME = 2;
     public static final int FIELD_FPS = 4;
+    public static final int FIELD_TEMPERATURE = 8;
+    public static final int FIELD_HUMIDITY = 16;
+    public static final int FIELD_PRESSURE = 32;
+    public static final int FIELD_BATTERY = 64;
+    public static final int FIELD_BATTERY_TEMPERATURE = 128;
+    public static final int FIELD_CHARGING = 256;
+    public static final int FIELD_THERMAL = 512;
     public static final int ALL_FIELDS = FIELD_LOCATION | FIELD_DATETIME | FIELD_FPS;
 
     public static final String[] POSITIONS = {"bottom-left", "bottom-right", "top-left", "top-right"};
     public static final int MIN_TEXT_SIZE = 10;
     public static final int MAX_TEXT_SIZE = 96;
-    public static final int MAX_ASSIGNMENTS_LENGTH = 200;
+    public static final int MAX_ASSIGNMENTS_LENGTH = 1024;
+    private static final String[] FIELD_NAMES = {
+        "location", "datetime", "fps", "temperature", "humidity", "pressure", "battery",
+        "battery_temperature", "charging", "thermal"
+    };
     private static final Pattern LOCATION_PATTERN = Pattern.compile("[\\p{L}\\p{N}_.-]([\\p{L}\\p{N} _.-]*[\\p{L}\\p{N}_.-])?");
     private static final Pattern FPS_PATTERN = Pattern.compile("[0-9]+(\\.[0-9])?");
     private static final Pattern JPEG_SIZE_PATTERN = Pattern.compile("[1-9][0-9]{0,4}x[1-9][0-9]{0,4}");
-    private static final String[] FIELD_NAMES = {"location", "datetime", "fps"};
+    private static final Pattern COLOR_PATTERN = Pattern.compile("#[0-9A-Fa-f]{6}");
+    private static final Pattern MQTT_HOST_PATTERN = Pattern.compile("[A-Za-z0-9.-]{0,253}");
+    private static final Pattern MQTT_TOPIC_PATTERN = Pattern.compile("[A-Za-z0-9_./#-]{1,128}");
 
     public final boolean overlayEnabled;
     public final String location;
@@ -46,8 +70,23 @@ public final class CaptureConfig {
     public final int fields;
     public final long targetFpsTenths;
     public final String jpegSize;
+    public final boolean panelEnabled;
+    public final String panelTextColor;
+    public final String panelBackgroundColor;
+    public final int panelTextSize;
+    public final boolean panelEnvironment;
+    public final boolean panelDevice;
+    public final boolean panelCapture;
+    public final String mqttHost;
+    public final int mqttPort;
+    public final String mqttTopic;
+    public final boolean mqttTls;
 
-    private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields, long targetFpsTenths, String jpegSize) {
+    private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields,
+                          long targetFpsTenths, String jpegSize, boolean panelEnabled, String panelTextColor,
+                          String panelBackgroundColor, int panelTextSize, boolean panelEnvironment,
+                          boolean panelDevice, boolean panelCapture, String mqttHost, int mqttPort,
+                          String mqttTopic, boolean mqttTls) {
         this.overlayEnabled = overlayEnabled;
         this.location = location;
         this.position = position;
@@ -55,11 +94,24 @@ public final class CaptureConfig {
         this.fields = fields;
         this.targetFpsTenths = targetFpsTenths;
         this.jpegSize = jpegSize;
+        this.panelEnabled = panelEnabled;
+        this.panelTextColor = panelTextColor;
+        this.panelBackgroundColor = panelBackgroundColor;
+        this.panelTextSize = panelTextSize;
+        this.panelEnvironment = panelEnvironment;
+        this.panelDevice = panelDevice;
+        this.panelCapture = panelCapture;
+        this.mqttHost = mqttHost;
+        this.mqttPort = mqttPort;
+        this.mqttTopic = mqttTopic;
+        this.mqttTls = mqttTls;
     }
 
     /** Conservative defaults: overlay on, NYX, bottom-left, size 24 (at 720 px short side), all visible fields, 1.0 FPS target. */
     public static CaptureConfig defaults() {
-        return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10, "auto");
+        return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10, "auto",
+            true, "#ff0000", "#000000", 16, true, true, true,
+            "", 1883, "homeassistant/nyx/reading", false);
     }
 
     /** Result of parsing: exactly one of config and error is non-null. */
@@ -78,11 +130,30 @@ public final class CaptureConfig {
         int fields;
         long fps;
         String jpegSize;
+        boolean panelEnabled;
+        String panelTextColor;
+        String panelBackgroundColor;
+        int panelTextSize;
+        boolean panelEnvironment;
+        boolean panelDevice;
+        boolean panelCapture;
+        String mqttHost;
+        int mqttPort;
+        String mqttTopic;
+        boolean mqttTls;
         Draft(CaptureConfig c) {
             overlay = c.overlayEnabled; location = c.location; position = c.position;
             textSize = c.textSize; fields = c.fields; fps = c.targetFpsTenths; jpegSize = c.jpegSize;
+            panelEnabled = c.panelEnabled; panelTextColor = c.panelTextColor;
+            panelBackgroundColor = c.panelBackgroundColor; panelTextSize = c.panelTextSize;
+            panelEnvironment = c.panelEnvironment; panelDevice = c.panelDevice; panelCapture = c.panelCapture;
+            mqttHost = c.mqttHost; mqttPort = c.mqttPort; mqttTopic = c.mqttTopic; mqttTls = c.mqttTls;
         }
-        CaptureConfig build() { return new CaptureConfig(overlay, location, position, textSize, fields, fps, jpegSize); }
+        CaptureConfig build() {
+            return new CaptureConfig(overlay, location, position, textSize, fields, fps, jpegSize,
+                panelEnabled, panelTextColor, panelBackgroundColor, panelTextSize, panelEnvironment,
+                panelDevice, panelCapture, mqttHost, mqttPort, mqttTopic, mqttTls);
+        }
     }
 
     /** Validates one key/value into draft; returns null when valid, otherwise an actionable error. */
@@ -129,6 +200,54 @@ public final class CaptureConfig {
                 return null;
             case TEXT_COLOR:
                 return value.equals(TEXT_COLOR_GREEN) ? null : "invalid-text_color:only-green-is-supported";
+            case PANEL_ENABLED:
+                if (!value.equals("on") && !value.equals("off")) return "invalid-panel_enabled:expected-on-or-off";
+                d.panelEnabled = value.equals("on");
+                return null;
+            case PANEL_TEXT_COLOR:
+                if (!COLOR_PATTERN.matcher(value).matches()) return "invalid-panel_text_color:expected-hex-color";
+                d.panelTextColor = value.toLowerCase(Locale.ROOT);
+                return null;
+            case PANEL_BACKGROUND_COLOR:
+                if (!COLOR_PATTERN.matcher(value).matches()) return "invalid-panel_background_color:expected-hex-color";
+                d.panelBackgroundColor = value.toLowerCase(Locale.ROOT);
+                return null;
+            case PANEL_TEXT_SIZE: {
+                int n = parseInt(value);
+                if (n < 10 || n > 48) return "invalid-panel_text_size:expected-10-48";
+                d.panelTextSize = n;
+                return null;
+            }
+            case PANEL_ENVIRONMENT:
+            case PANEL_DEVICE:
+            case PANEL_CAPTURE:
+                if (!value.equals("on") && !value.equals("off")) return "invalid-" + key + ":expected-on-or-off";
+                if (key.equals(PANEL_ENVIRONMENT)) d.panelEnvironment = value.equals("on");
+                else if (key.equals(PANEL_DEVICE)) d.panelDevice = value.equals("on");
+                else d.panelCapture = value.equals("on");
+                return null;
+            case MQTT_HOST:
+                if (value.length() > 253 || !MQTT_HOST_PATTERN.matcher(value).matches()
+                    || value.startsWith(".") || value.endsWith(".") || value.contains(".."))
+                    return "invalid-mqtt_host:expected-hostname-or-empty";
+                d.mqttHost = value;
+                return null;
+            case MQTT_PORT: {
+                int port = parseInt(value);
+                if (port < 1 || port > 65535) return "invalid-mqtt_port:expected-1-65535";
+                d.mqttPort = port;
+                return null;
+            }
+            case MQTT_TOPIC:
+                if (!MQTT_TOPIC_PATTERN.matcher(value).matches() || value.contains("//")
+                    || (value.contains("#") && !value.endsWith("#")))
+                    return "invalid-mqtt_topic:expected-bounded-topic";
+                d.mqttTopic = value;
+                return null;
+            case MQTT_TLS:
+                if (!value.equals("on") && !value.equals("off")) return "invalid-mqtt_tls:expected-on-or-off";
+                d.mqttTls = value.equals("on");
+                return null;
             default:
                 return "unknown-key:" + safe(key);
         }
@@ -157,11 +276,11 @@ public final class CaptureConfig {
      * their defaults; unknown keys, bad values and oversized sets are rejected as a whole.
      */
     public static Parsed fromEntries(Map<String, String> entries) {
-        if (entries.size() > 16) return new Parsed(null, "too-many-keys");
+        if (entries.size() > 32) return new Parsed(null, "too-many-keys");
         Draft draft = new Draft(defaults());
         for (Map.Entry<String, String> e : entries.entrySet()) {
             String value = e.getValue();
-            if (value == null || value.length() > 64) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
+            if (value == null || value.length() > 128) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
             String error = apply(draft, e.getKey(), value);
             if (error != null) return new Parsed(null, error);
         }
@@ -171,11 +290,11 @@ public final class CaptureConfig {
     /** Applies a complete set of decoded properties without parsing shell assignment syntax. */
     public static Parsed updateEntries(Map<String, String> entries, CaptureConfig base) {
         if (entries == null || entries.isEmpty()) return new Parsed(null, "no-assignments");
-        if (entries.size() > 16) return new Parsed(null, "too-many-keys");
+        if (entries.size() > 32) return new Parsed(null, "too-many-keys");
         Draft draft = new Draft(base);
         for (Map.Entry<String, String> e : entries.entrySet()) {
             String value = e.getValue();
-            if (value == null || value.length() > 64) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
+            if (value == null || value.length() > 128) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
             String error = apply(draft, e.getKey(), value);
             if (error != null) return new Parsed(null, error);
         }
@@ -192,6 +311,17 @@ public final class CaptureConfig {
         m.put(TARGET_FPS, targetFpsString());
         m.put(JPEG_SIZE, jpegSize);
         m.put(TEXT_COLOR, TEXT_COLOR_GREEN);
+        m.put(PANEL_ENABLED, panelEnabled ? "on" : "off");
+        m.put(PANEL_TEXT_COLOR, panelTextColor);
+        m.put(PANEL_BACKGROUND_COLOR, panelBackgroundColor);
+        m.put(PANEL_TEXT_SIZE, Integer.toString(panelTextSize));
+        m.put(PANEL_ENVIRONMENT, panelEnvironment ? "on" : "off");
+        m.put(PANEL_DEVICE, panelDevice ? "on" : "off");
+        m.put(PANEL_CAPTURE, panelCapture ? "on" : "off");
+        m.put(MQTT_HOST, mqttHost);
+        m.put(MQTT_PORT, Integer.toString(mqttPort));
+        m.put(MQTT_TOPIC, mqttTopic);
+        m.put(MQTT_TLS, mqttTls ? "on" : "off");
         return m;
     }
 
