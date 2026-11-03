@@ -23,6 +23,8 @@ B
 printf '#!/usr/bin/env bash\nexec bash "%s/test/fake-adb.sh" "$@"\n' "$ROOT" > "$T/bin/adb"
 cat > "$T/bin/aapt2" <<'B'
 #!/usr/bin/env bash
+[[ -n ${FAKE_AAPT_FAIL:-} ]] && { echo "aapt2 error" >&2; exit 3; }
+[[ -n ${FAKE_AAPT_LINE:-} ]] && { printf '%s\n' "$FAKE_AAPT_LINE"; exit 0; }
 read -r n c < "$3"; echo "package: name='local.termux.observatorycamera' versionCode='$c' versionName='$n' platformBuildVersionName='13'"
 B
 cat > "$T/bin/apksigner" <<'B'
@@ -42,7 +44,7 @@ fails=0
 reset() {
     printf 'A1 device\n' > "$FAKE_DEVICES"; : > "$FAKE_LOG"; rm -f "$FAKE_LOG.bad" "$R/dist/"* "$R/dist/".deploy-stamp
     echo k > "$SIGN/identity.p12"; echo p > "$SIGN/password"
-    unset FAKE_BUILD_FAIL FAKE_TEST_FAIL FAKE_INSTALL FAKE_INSTALLED FAKE_APK_CONTENT; export FAKE_VERSION="0.5.0 5"
+    unset FAKE_AAPT_LINE FAKE_AAPT_FAIL FAKE_BUILD_FAIL FAKE_TEST_FAIL FAKE_INSTALL FAKE_INSTALLED FAKE_APK_CONTENT; export FAKE_VERSION="0.5.0 5"
 }
 check() { # name rc pattern -- args
     local name=$1 want=$2 pat=$3; shift 3
@@ -71,6 +73,26 @@ FAKE_BUILD_FAIL=1 check "build fail never installs old APK" 24 'build.sh failed'
 expect_not_installed "build fail"; [[ ! -e $R/dist/observatory-ip-camera.apk ]] && echo "ok: old APK removed"
 reset; FAKE_APK_CONTENT="0.5.0 5 BADSIG" check "bad signature" 25 'signature verification failed'
 expect_not_installed "bad signature"
+# APK metadata parsing (exact real aapt2 line, suffixed/reordered/missing/ambiguous fields)
+REAL="package: name='local.termux.observatorycamera' versionCode='5' versionName='0.5.0' platformBuildVersionName='13' platformBuildVersionCode='33' compileSdkVersion='33' compileSdkVersionCodename='13'"
+old=$(sed -n "s/^package: .*name='\([^']*\)'.*/\1/p" <<<"$REAL")
+[[ $old == 13 ]] && echo "ok: old greedy sed reproduces package='13'" || { echo "FAIL: old parser demo ($old)"; fails=$((fails+1)); }
+reset; FAKE_AAPT_LINE=$REAL check "real aapt2 line parsed" 0 'apk version: 0.5.0 \(5\)'
+reset; FAKE_AAPT_LINE="package: compileSdkVersionCodename='13' versionName='0.5.0' name='local.termux.observatorycamera' versionCode='5' platformBuildVersionName='9'" check "reordered fields" 0 'apk version: 0.5.0 \(5\)'
+reset; FAKE_AAPT_LINE="package: xname='bad' name='local.termux.observatorycamera' versionCodeX='9' versionCode='5' versionNameSuffix='z' versionName='0.5.0'" check "suffixed fields ignored" 0 'apk version: 0.5.0 \(5\)'
+reset; FAKE_AAPT_LINE="package: name='other.pkg' versionCode='5' versionName='0.5.0' installLocation='local.termux.observatorycamera'" check "wrong package, expected text elsewhere" 25 "package='other.pkg'"
+expect_not_installed "wrong package"
+reset; FAKE_AAPT_LINE="package: versionCode='5' versionName='0.5.0' compileSdkVersionCodename='13'" check "missing name" 25 'missing, empty or ambiguous'
+reset; FAKE_AAPT_LINE="package: name='local.termux.observatorycamera' versionName='0.5.0'" check "missing versionCode" 25 'missing, empty or ambiguous'
+reset; FAKE_AAPT_LINE="package: name='local.termux.observatorycamera' versionCode='5'" check "missing versionName" 25 'missing, empty or ambiguous'
+reset; FAKE_AAPT_LINE="package: name='local.termux.observatorycamera' versionCode='' versionName='0.5.0'" check "empty versionCode" 25 'missing, empty or ambiguous'
+reset; FAKE_AAPT_LINE="package: name='local.termux.observatorycamera' name='local.termux.observatorycamera' versionCode='5' versionName='0.5.0'" check "duplicate name" 25 'missing, empty or ambiguous'
+reset; FAKE_AAPT_LINE="package: name='local.termux.observatorycamera' versionCode='5' versionName='0.5.0' bogus" check "malformed trailing text" 25 'missing, empty or ambiguous'
+reset; FAKE_AAPT_LINE=$(printf '%s\n%s' "$REAL" "$REAL") check "multiple package lines" 25 'missing, empty or ambiguous'
+reset; FAKE_AAPT_LINE='package: name='"'"'local.termux.observatorycamera'"'"' versionCode='"'"'5'"'"' versionName='"'"'$(touch '"$T"'/pwned)'"'"'' check "quoted values never executed" 28 'signature OK'
+[[ ! -e $T/pwned ]] && echo "ok: no command execution" || { echo "FAIL: executed"; fails=$((fails+1)); }
+reset; FAKE_AAPT_FAIL=1 check "aapt2 failure" 25 'aapt2 failed'
+expect_not_installed "aapt2 failure"
 reset; FAKE_INSTALL=fail check "install failure" 27 'install -r failed'
 reset; FAKE_VERSION="0.4.0 4" check "version verification failure" 28 'does not match'
 reset; printf 'A1 device\nB2 device\n' > "$FAKE_DEVICES"; check "multiple devices refused" 26 'ambiguous'

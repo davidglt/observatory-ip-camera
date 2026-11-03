@@ -165,17 +165,39 @@ git_update() {
     run_phase $EX_GIT "git merge --ff-only" git -C "$ROOT" merge --ff-only FETCH_HEAD
 }
 
-apk_field() { # field name from aapt2 badging package line
-    aapt2 dump badging "$APK" 2>/dev/null | sed -n "s/^package: .*$1='\([^']*\)'.*/\1/p" | head -n 1
+# Parse the single "package:" line of aapt2 badging output into APK_PKG_NAME/APK_PKG_CODE/APK_PKG_VERSION.
+# Fields are matched by exact name (whitespace-delimited name='value' pairs); nothing is eval'd or executed.
+# Fails (returns 1) on aapt2 failure, no/multiple package lines, malformed, duplicate, missing or empty fields.
+parse_badging() { # $1 = aapt2 badging output
+    local line rest key val n=0 l
+    APK_PKG_NAME= APK_PKG_CODE= APK_PKG_VERSION=
+    local seen_name=0 seen_code=0 seen_ver=0
+    while IFS= read -r l; do
+        if [[ $l == "package:"* ]]; then n=$((n+1)); line=$l; fi
+    done <<<"$1"
+    (( n == 1 )) || return 1
+    rest=${line#package:}
+    while [[ $rest =~ ^[[:space:]]+([^[:space:]=\']+)=\'([^\']*)\'(.*)$ ]]; do
+        key=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]} rest=${BASH_REMATCH[3]}
+        case $key in
+            name) (( seen_name )) && return 1; seen_name=1; APK_PKG_NAME=$val ;;
+            versionCode) (( seen_code )) && return 1; seen_code=1; APK_PKG_CODE=$val ;;
+            versionName) (( seen_ver )) && return 1; seen_ver=1; APK_PKG_VERSION=$val ;;
+        esac
+    done
+    [[ -z ${rest//[[:space:]]/} ]] || return 1
+    [[ -n $APK_PKG_NAME && -n $APK_PKG_CODE && -n $APK_PKG_VERSION ]]
 }
 
 verify_apk() {
     need_tools aapt2 apksigner
     [[ -s $APK ]] || die $EX_SIG "APK missing: $APK"
     apksigner verify "$APK" >/dev/null 2>&1 || die $EX_SIG "APK signature verification failed"
-    local pkg code name
-    pkg=$(apk_field name); code=$(apk_field versionCode); name=$(apk_field versionName)
-    [[ $pkg == "$PKG" && -n $code && -n $name ]] || die $EX_SIG "unexpected APK metadata (package='$pkg' versionCode='$code' versionName='$name')"
+    local badging pkg code name
+    badging=$(aapt2 dump badging "$APK" 2>/dev/null) || die $EX_SIG "aapt2 failed to read APK metadata"
+    parse_badging "$badging" || die $EX_SIG "unreadable, missing, empty or ambiguous APK package metadata"
+    pkg=$APK_PKG_NAME code=$APK_PKG_CODE name=$APK_PKG_VERSION
+    [[ $pkg == "$PKG" ]] || die $EX_SIG "unexpected APK metadata (package='$pkg' versionCode='$code' versionName='$name')"
     APK_VERSION="$name ($code)"; APK_CODE=$code; APK_NAME=$name
     say "APK: $PKG $APK_VERSION, signature OK"
 }
