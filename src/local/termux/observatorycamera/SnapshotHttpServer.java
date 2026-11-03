@@ -14,37 +14,113 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 
-/** A bounded, sequential development server serving only the private snapshot. */
-public final class SnapshotHttpServer implements Runnable {
+/** A bounded, sequential development server serving only the private snapshot. Start and stop are idempotent. */
+public final class SnapshotHttpServer {
+    public static final int DEFAULT_PORT = 8080;
     private static final int MAX_HEADER = 8192;
     private static final int MAX_IMAGE = 16 * 1024 * 1024;
+    private static final long STOP_JOIN_MILLIS = 2000;
     private final File snapshot;
+    private final int port;
     private final Consumer<String> log;
+    private final Object lock = new Object();
+    private ServerSocket listener;
+    private Thread worker;
+    private volatile Socket active;
+    private volatile Runnable onTerminated;
 
     public SnapshotHttpServer(File snapshot, Consumer<String> log) {
+        this(snapshot, DEFAULT_PORT, log);
+    }
+
+    public SnapshotHttpServer(File snapshot, int port, Consumer<String> log) {
         this.snapshot = snapshot;
+        this.port = port;
         this.log = log;
     }
 
-    @Override public void run() {
-        try (ServerSocket listener = new ServerSocket()) {
-            listener.setReuseAddress(true);
-            listener.bind(new InetSocketAddress(InetAddress.getByName("0.0.0.0"), 8080), 8);
-            log.accept("Listening on 0.0.0.0:8080; endpoint: /snapshot.jpg");
-            while (!Thread.currentThread().isInterrupted()) {
+    /** Called from the worker thread if it ends without stop() having been requested. */
+    public void setOnTerminated(Runnable callback) { onTerminated = callback; }
+
+    /** Binds synchronously so failures (such as an occupied port) are reported. Does nothing if already running. */
+    public void start() throws IOException {
+        synchronized (lock) {
+            if (worker != null && worker.isAlive()) return;
+            ServerSocket socket = new ServerSocket();
+            try {
+                socket.setReuseAddress(true);
+                socket.bind(new InetSocketAddress(InetAddress.getByName("0.0.0.0"), port), 8);
+            } catch (IOException | RuntimeException e) {
+                closeQuietly(socket);
+                throw e;
+            }
+            log.accept("Listening on 0.0.0.0:" + socket.getLocalPort() + "; endpoint: /snapshot.jpg");
+            Thread thread = new Thread(() -> serve(socket), "snapshot-http");
+            thread.setUncaughtExceptionHandler((t, error) -> log.accept("HTTP thread crashed: " + error));
+            thread.setDaemon(true);
+            listener = socket;
+            worker = thread;
+            thread.start();
+        }
+    }
+
+    /** Closes the listener and any active client socket, then waits briefly for the worker to end. */
+    public void stop() {
+        ServerSocket socket;
+        Thread thread;
+        synchronized (lock) {
+            socket = listener;
+            thread = worker;
+            listener = null;
+            worker = null;
+        }
+        if (socket == null) return;
+        closeQuietly(socket);
+        closeQuietly(active);
+        thread.interrupt();
+        if (thread != Thread.currentThread()) {
+            try { thread.join(STOP_JOIN_MILLIS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
+        log.accept("HTTP server stopped");
+    }
+
+    public boolean isRunning() {
+        synchronized (lock) { return worker != null && worker.isAlive(); }
+    }
+
+    public int getLocalPort() {
+        synchronized (lock) { return listener == null ? -1 : listener.getLocalPort(); }
+    }
+
+    private static void closeQuietly(java.io.Closeable closeable) {
+        if (closeable == null) return;
+        try { closeable.close(); } catch (IOException ignored) { }
+    }
+
+    private void serve(ServerSocket socket) {
+        try {
+            while (!socket.isClosed() && !Thread.currentThread().isInterrupted()) {
                 log.accept("Waiting for client");
-                try (Socket client = listener.accept()) {
+                try (Socket client = socket.accept()) {
+                    active = client;
+                    if (socket.isClosed()) break;
                     log.accept("Accepted: " + client.getRemoteSocketAddress());
                     client.setSoTimeout(5000);
                     handle(client);
                     log.accept("Handler finished; closing client");
                 } catch (IOException | RuntimeException e) {
+                    if (socket.isClosed()) break;
                     log.accept("Client error: " + e);
+                } finally {
+                    active = null;
                 }
-                log.accept("Client block finished");
             }
-        } catch (IOException e) {
-            log.accept("HTTP server stopped: " + e);
+        } finally {
+            closeQuietly(socket);
+            boolean deliberate;
+            synchronized (lock) { deliberate = listener != socket; }
+            Runnable callback = onTerminated;
+            if (!deliberate && callback != null) callback.run();
         }
     }
 
