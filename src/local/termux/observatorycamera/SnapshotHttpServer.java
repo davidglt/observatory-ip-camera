@@ -32,12 +32,16 @@ public final class SnapshotHttpServer implements Runnable {
             listener.bind(new InetSocketAddress(InetAddress.getByName("0.0.0.0"), 8080), 8);
             log.accept("Listening on 0.0.0.0:8080; endpoint: /snapshot.jpg");
             while (!Thread.currentThread().isInterrupted()) {
+                log.accept("Waiting for client");
                 try (Socket client = listener.accept()) {
+                    log.accept("Accepted: " + client.getRemoteSocketAddress());
                     client.setSoTimeout(5000);
                     handle(client);
-                } catch (IOException e) {
-                    log.accept("Client error: " + e.getClass().getSimpleName());
+                    log.accept("Handler finished; closing client");
+                } catch (IOException | RuntimeException e) {
+                    log.accept("Client error: " + e);
                 }
+                log.accept("Client block finished");
             }
         } catch (IOException e) {
             log.accept("HTTP server stopped: " + e);
