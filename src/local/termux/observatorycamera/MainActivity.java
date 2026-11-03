@@ -12,6 +12,7 @@ import android.media.ImageReader;
 import android.os.Bundle;
 import android.os.Handler;
 import android.util.Log;
+import android.view.OrientationEventListener;
 import android.util.Size;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -33,10 +34,23 @@ public final class MainActivity extends Activity {
     private boolean resumed;
     private boolean capturePending;
     private boolean permissionRequested;
+    private static final String STATE_DEVICE_ORIENTATION = "deviceOrientation";
+    private OrientationEventListener orientationListener;
+    private int lastValidDeviceOrientation = -1;
     private final Runnable timeout = () -> fail("Capture timed out.");
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        if (state != null) {
+            int saved = state.getInt(STATE_DEVICE_ORIENTATION, -1);
+            if (saved >= 0 && saved < 360) lastValidDeviceOrientation = saved;
+        }
+        orientationListener = new OrientationEventListener(this) {
+            @Override public void onOrientationChanged(int angle) {
+                // ORIENTATION_UNKNOWN (device flat/ambiguous) keeps the last valid angle.
+                if (angle != ORIENTATION_UNKNOWN && angle >= 0 && angle < 360) lastValidDeviceOrientation = angle;
+            }
+        };
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         int p = (int) (24 * getResources().getDisplayMetrics().density);
@@ -55,8 +69,20 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         resumed = true;
+        if (orientationListener.canDetectOrientation()) orientationListener.enable();
+        else Log.w(TAG, "Device orientation sensor unavailable; JPEG orientation will use the fallback.");
         consumeCaptureIntent();
         tryPendingCapture();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        if (lastValidDeviceOrientation >= 0) state.putInt(STATE_DEVICE_ORIENTATION, lastValidDeviceOrientation);
+    }
+
+    @Override protected void onDestroy() {
+        orientationListener.disable();
+        super.onDestroy();
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -149,7 +175,9 @@ public final class MainActivity extends Activity {
                     handler.post(() -> { if (token == generation) closeCapture(); });
                 } catch (Exception e) { fail(e.toString()); }
             }, handler);
-            final Integer orientation = info.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            final Integer sensorValue = info.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            final int sensorOrientation = sensorValue == null ? 0 : sensorValue;
+            final boolean frontFacing = Integer.valueOf(CameraCharacteristics.LENS_FACING_FRONT).equals(info.get(CameraCharacteristics.LENS_FACING));
             manager.openCamera(selected, new CameraDevice.StateCallback() {
                 @Override public void onOpened(CameraDevice device) {
                     if (token != generation) { device.close(); return; }
@@ -162,7 +190,14 @@ public final class MainActivity extends Activity {
                                 try {
                                     CaptureRequest.Builder request = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
                                     request.addTarget(reader.getSurface());
-                                    request.set(CaptureRequest.JPEG_ORIENTATION, orientation == null ? 0 : orientation);
+                                    final int snapshotAngle = lastValidDeviceOrientation;
+                                    final boolean fallback = snapshotAngle < 0;
+                                    final int deviceOrientation = fallback ? 0 : JpegOrientation.roundDeviceOrientation(snapshotAngle);
+                                    final int jpegOrientation = JpegOrientation.calculate(sensorOrientation, deviceOrientation, frontFacing);
+                                    request.set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation);
+                                    Log.i(TAG, "JPEG orientation: sensor=" + sensorOrientation + ", device=" + deviceOrientation
+                                        + ", jpeg=" + jpegOrientation + ", fallback=" + fallback
+                                        + (fallback ? " (no valid reading; assumed device angle 0, not measured)" : " (measured)"));
                                     report("Capturing JPEG...");
                                     configured.capture(request.build(), new CameraCaptureSession.CaptureCallback() {
                                         @Override public void onCaptureFailed(CameraCaptureSession s, CaptureRequest r, CaptureFailure failure) {
@@ -198,6 +233,7 @@ public final class MainActivity extends Activity {
         resumed = false;
         if (capturePending) report("Pending capture cancelled: activity paused.");
         capturePending = false;
+        orientationListener.disable();
         closeCapture();
         super.onPause();
     }
