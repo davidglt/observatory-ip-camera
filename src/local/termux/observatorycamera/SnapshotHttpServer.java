@@ -12,11 +12,16 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -36,14 +41,61 @@ public final class SnapshotHttpServer {
     private static final int MAX_STREAM_FRAME = 8 * 1024 * 1024;
     private static final long STOP_JOIN_MILLIS = 2000;
     private static final long POLL_MILLIS = 200;
+    private static final SecureRandom NONCES = new SecureRandom();
     private static final String VIEWER = "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
         + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Observatory camera</title>"
-        + "<style>body{margin:0;background:#111;color:#ccc;font-family:sans-serif}img{display:block;max-width:100%;height:auto;margin:0 auto}"
-        + "p{margin:8px;font-size:small}</style></head><body><img src=\"/stream.mjpg\" alt=\"Live camera stream\">"
-        + "<p>Read-only view. Frames appear only when the camera publishes a new image; if the stream ends, reload this page.</p></body></html>\n";
+        + "<style>body{margin:0;background:#111;color:#ccc;font-family:sans-serif}header{display:flex;align-items:center;gap:1em;padding:8px}"
+        + "img{display:block;max-width:100%;height:auto;margin:0 auto}p{margin:8px;font-size:small}#settings{padding:1em;background:#222}"
+        + "label{display:block;margin:.5em 0}input,select,button{font:inherit;margin:.2em}#settings[hidden]{display:none}</style>"
+        + "</head><body><header><strong>Observatory camera</strong><button id=\"settings-button\" type=\"button\">Settings</button></header>"
+        + "<section id=\"settings\" hidden><h2>Settings</h2><p>Metadata FPS is an estimate, not guaranteed throughput. Requested target, application cap and measured rate are separate.</p>"
+        + "<label>Admin token <input id=\"token\" type=\"password\" autocomplete=\"off\"></label>"
+        + "<button id=\"load\" type=\"button\">Load settings</button><button id=\"clear\" type=\"button\">Forget token</button>"
+        + "<form id=\"form\" hidden><label>Overlay <select name=\"overlay\"><option>on</option><option>off</option></select></label>"
+        + "<label>Location <input name=\"location\" maxlength=\"24\"></label><label>Position <select name=\"position\">"
+        + "<option>bottom-left</option><option>bottom-right</option><option>top-left</option><option>top-right</option></select></label>"
+        + "<label>Text size <input name=\"text_size\" type=\"number\" min=\"10\" max=\"96\"></label>"
+        + "<label>Fields <input name=\"fields\" maxlength=\"32\"></label><label>Text color <select name=\"text_color\"><option>green</option></select></label>"
+        + "<label>JPEG size <select name=\"jpeg_size\"></select></label>"
+        + "<label>Target FPS <input name=\"target_fps\" type=\"number\" min=\"0.1\" max=\"3.0\" step=\"0.1\"></label>"
+        + "<button type=\"submit\">Save settings</button></form><pre id=\"result\" aria-live=\"polite\"></pre></section>"
+        + "<img src=\"/stream.mjpg\" alt=\"Live camera stream\">"
+        + "<p>Read-only viewer. Frames appear only when the camera publishes a new image. Settings require the device-admin token.</p>"
+        + "<script nonce=\"__NONCE__\">(()=>{let token='';const $=id=>document.getElementById(id),form=$('form'),result=$('result');"
+        + "$('settings-button').onclick=()=>{$('settings').hidden=!$('settings').hidden};"
+        + "$('clear').onclick=()=>{token='';$('token').value='';form.hidden=true;result.textContent='Token forgotten from memory.'};"
+        + "async function api(path,method='GET',body){const r=await fetch(path,{method,mode:'same-origin',credentials:'omit',cache:'no-store',headers:{'Authorization':'Bearer '+token,...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},body});"
+        + "const data=await r.json();if(!r.ok)throw Error(data.error||('HTTP '+r.status));return data}"
+        + "$('load').onclick=async()=>{token=$('token').value;try{const [c,k]=await Promise.all([api('/api/config'),api('/api/capabilities')]);"
+        + "const s=c.settings;for(const e of form.elements)if(e.name&&s[e.name]!==undefined)e.value=s[e.name];"
+        + "const size=form.elements.jpeg_size;size.replaceChildren();const a=new Option('auto — nearest to 1280x720 ('+k.auto_size+')','auto');a.disabled=!k.auto_supported;size.append(a);"
+        + "for(const x of k.sizes){const o=document.createElement('option');o.value=x.size;o.disabled=!x.application_supported;o.textContent=x.size+(x.application_supported?'':' (not app-supported)')+' — min '+(x.min_frame_duration_ns??'unknown')+' ns, stall '+(x.jpeg_stall_duration_ns??'unknown')+' ns; estimate '+x.estimate_fps+' FPS, app cap '+x.application_cap_fps+' FPS';size.append(o)}"
+        + "if(!Array.from(size.options).some(o=>o.value===s.jpeg_size))size.add(new Option(s.jpeg_size+' (unsupported)',s.jpeg_size));size.value=s.jpeg_size;"
+        + "form.hidden=false;result.textContent='Requested FPS: '+s.target_fps+'; effective target: '+c.effective_target_fps+'; metadata estimate: '+c.metadata_estimate_fps+'; application cap: '+c.application_cap_fps+'; measured FPS: '+c.measured_fps+'; desired size: '+c.desired_size+'; effective size: '+c.effective_size+'; '+(c.reload_error||'')"
+        + "}catch(e){token='';$('token').value='';form.hidden=true;result.textContent='Could not load settings: '+e.message}};"
+        + "form.onsubmit=async e=>{e.preventDefault();const p=new URLSearchParams(new FormData(form));try{const c=await api('/api/config','PUT',p.toString());"
+        + "result.textContent='Saved atomically. Requested FPS: '+c.settings.target_fps+'; effective target: '+c.effective_target_fps+'; metadata estimate: '+c.metadata_estimate_fps+'; application cap: '+c.application_cap_fps+'; measured FPS: '+c.measured_fps+'; desired size: '+c.desired_size+'; effective size: '+c.effective_size+'; reload: '+(c.reload_error||'next frame/session');"
+        + "}catch(e){result.textContent='Not saved: '+e.message}}})()</script></body></html>\n";
+
+    public interface AdminApi {
+        ApiResult handle(String method, String path, byte[] body);
+    }
+
+    public static final class ApiResult {
+        public final int status;
+        public final String reason;
+        public final byte[] body;
+        public ApiResult(int status, String reason, String body) {
+            this.status = status;
+            this.reason = reason;
+            this.body = body.getBytes(StandardCharsets.UTF_8);
+        }
+    }
     private final File snapshot;
     private final int port;
     private final Consumer<String> log;
+    private final AdminTokenStore tokenStore;
+    private final AdminApi adminApi;
     private final Object lock = new Object();
     private Session session;
     private volatile Runnable onTerminated;
@@ -57,9 +109,15 @@ public final class SnapshotHttpServer {
     }
 
     public SnapshotHttpServer(File snapshot, int port, Consumer<String> log) {
+        this(snapshot, port, log, null, null);
+    }
+
+    public SnapshotHttpServer(File snapshot, int port, Consumer<String> log, AdminTokenStore tokenStore, AdminApi adminApi) {
         this.snapshot = snapshot;
         this.port = port;
         this.log = log;
+        this.tokenStore = tokenStore;
+        this.adminApi = adminApi;
     }
 
     /** Test hook; applies to the next start(). */
@@ -203,9 +261,10 @@ public final class SnapshotHttpServer {
 
         void rejectBusy(Socket client) throws IOException {
             byte[] body = bytes("Too many connections.\n");
-            String header = "HTTP/1.1 503 Service Unavailable\r\nServer: ObservatoryNative/0.3\r\nContent-Type: text/plain\r\nContent-Length: "
-                + body.length + "\r\nCache-Control: no-store\r\nRetry-After: 2\r\nConnection: close\r\n\r\n";
             OutputStream out = client.getOutputStream();
+            String header = "HTTP/1.1 503 Service Unavailable\r\nServer: ObservatoryNative/0.3\r\nContent-Type: text/plain\r\nContent-Length: "
+                + body.length + "\r\nCache-Control: no-store\r\nRetry-After: 2\r\n" + securityHeaders("")
+                + "Connection: close\r\n\r\n";
             out.write(header.getBytes(StandardCharsets.US_ASCII));
             out.write(body);
             out.flush();
@@ -283,28 +342,168 @@ public final class SnapshotHttpServer {
                 reply(conn, output, 431, "Request Header Fields Too Large", "text/plain", bytes("Header too large.\n"), false);
                 return;
             }
-            String first = new String(header.toByteArray(), StandardCharsets.US_ASCII).split("\r\n", 2)[0];
+            String[] lines = new String(header.toByteArray(), StandardCharsets.US_ASCII).split("\r\n", -1);
+            String first = lines[0];
             String[] parts = first.split(" ");
             if (parts.length != 3 || !(parts[2].equals("HTTP/1.0") || parts[2].equals("HTTP/1.1"))) {
                 reply(conn, output, 400, "Bad Request", "text/plain", bytes("Invalid request.\n"), false);
                 return;
             }
+            Map<String, String> headers = new HashMap<>();
+            for (int i = 1; i < lines.length - 2; i++) {
+                int colon = lines[i].indexOf(':');
+                if (colon <= 0 || lines[i].charAt(0) == ' ' || lines[i].charAt(0) == '\t') {
+                    reply(conn, output, 400, "Bad Request", "text/plain", bytes("Invalid header.\n"), false);
+                    return;
+                }
+                String name = lines[i].substring(0, colon).toLowerCase(java.util.Locale.ROOT);
+                String value = lines[i].substring(colon + 1).trim();
+                if (!name.matches("[a-z0-9!#$%&'*+.^_`|~-]+") || headers.put(name, value) != null) {
+                    reply(conn, output, 400, "Bad Request", "text/plain", bytes("Invalid or duplicate header.\n"), false);
+                    return;
+                }
+            }
+            String host = headers.get("host");
+            if (host == null || !validAuthority(host)) {
+                reply(conn, output, 400, "Bad Request", "text/plain", bytes("Invalid Host.\n"), false);
+                return;
+            }
             boolean head = parts[0].equals("HEAD");
-            if (!head && !parts[0].equals("GET")) {
-                reply(conn, output, 405, "Method Not Allowed", "text/plain", bytes("Use GET or HEAD.\n"), false);
+            if (!head && !parts[0].equals("GET") && !parts[0].equals("PUT")) {
+                reply(conn, output, 405, "Method Not Allowed", "text/plain", bytes("Use GET, HEAD or PUT.\n"), false);
                 return;
             }
             String path = parts[1].split("\\?", 2)[0];
+            if (path.startsWith("/api/")) {
+                handleApi(conn, output, parts[0], path, headers, host, deadline);
+                return;
+            }
+            if (!parts[0].equals("GET") && !head) {
+                reply(conn, output, 405, "Method Not Allowed", "text/plain", bytes("Use GET or HEAD.\n"), false);
+                return;
+            }
             if (path.equals("/snapshot.jpg")) {
                 serveSnapshot(conn, output, head, parts[0]);
             } else if (path.equals("/")) {
-                reply(conn, output, 200, "OK", "text/html; charset=utf-8", bytes(VIEWER), head,
-                    "Content-Security-Policy: default-src 'none'; img-src 'self'; style-src 'unsafe-inline'\r\n");
+                byte[] nonceBytes = new byte[18];
+                NONCES.nextBytes(nonceBytes);
+                String nonce = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(nonceBytes);
+                String viewer = VIEWER.replace("__NONCE__", nonce);
+                reply(conn, output, 200, "OK", "text/html; charset=utf-8", bytes(viewer), head,
+                    "default-src 'none'; img-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-"
+                        + nonce + "'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'");
             } else if (path.equals("/stream.mjpg")) {
                 serveStream(conn, input, output, head);
             } else {
                 reply(conn, output, 404, "Not Found", "text/plain", bytes("Available: /, /snapshot.jpg, /stream.mjpg.\n"), head);
             }
+        }
+
+        private boolean validAuthority(String authority) {
+            try {
+                URI uri = new URI("http://" + authority);
+                String host = uri.getHost();
+                if (host == null || uri.getRawUserInfo() != null || uri.getRawPath().length() != 0
+                    || uri.getRawQuery() != null || uri.getRawFragment() != null
+                    || uri.getPort() < 1 || uri.getPort() > 65535 || !isIpv4(host)) return false;
+                return true;
+            } catch (URISyntaxException | RuntimeException e) {
+                return false;
+            }
+        }
+
+        private boolean sameOrigin(String origin, String host) {
+            try {
+                URI uri = new URI(origin);
+                URI authority = new URI("http://" + host);
+                return "http".equals(uri.getScheme()) && uri.getRawUserInfo() == null
+                    && uri.getRawPath().isEmpty() && uri.getRawQuery() == null && uri.getRawFragment() == null
+                    && uri.getPort() == authority.getPort() && isIpv4(uri.getHost())
+                    && uri.getHost().equalsIgnoreCase(authority.getHost());
+            } catch (URISyntaxException | RuntimeException e) {
+                return false;
+            }
+        }
+
+        private boolean isIpv4(String host) {
+            if (host == null || !host.matches("[0-9.]+")) return false;
+            String[] octets = host.split("\\.", -1);
+            if (octets.length != 4) return false;
+            for (String octet : octets) {
+                if (octet.isEmpty() || octet.length() > 3) return false;
+                int value;
+                try { value = Integer.parseInt(octet); } catch (NumberFormatException e) { return false; }
+                if (value > 255 || (octet.length() > 1 && octet.charAt(0) == '0')) return false;
+            }
+            return true;
+        }
+
+        private void handleApi(Conn conn, OutputStream output, String method, String path,
+                              Map<String, String> headers, String host, long requestDeadline) throws IOException {
+            if (!method.equals("GET") && !method.equals("PUT")) {
+                reply(conn, output, 405, "Method Not Allowed", "application/json; charset=utf-8",
+                    bytes("{\"error\":\"method-not-allowed\"}"), false, "");
+                return;
+            }
+            if (tokenStore == null || adminApi == null || tokenStore.read() == null) {
+                reply(conn, output, 503, "Service Unavailable", "application/json; charset=utf-8",
+                    bytes("{\"error\":\"admin-token-unavailable\"}"), false, "");
+                return;
+            }
+            String authorization = headers.get("authorization");
+            if (authorization == null || !authorization.startsWith("Bearer ")
+                || !tokenStore.matches(authorization.substring(7))) {
+                reply(conn, output, 401, "Unauthorized", "application/json; charset=utf-8",
+                    bytes("{\"error\":\"unauthorized\"}"), false,
+                    "");
+                return;
+            }
+            String origin = headers.get("origin");
+            if ((origin != null && !sameOrigin(origin, host))
+                || (method.equals("PUT") && (origin == null || !sameOrigin(origin, host)
+                    || "cross-site".equalsIgnoreCase(headers.get("sec-fetch-site"))))) {
+                reply(conn, output, 403, "Forbidden", "application/json; charset=utf-8",
+                    bytes("{\"error\":\"same-origin-required\"}"), false, "");
+                return;
+            }
+            byte[] body = new byte[0];
+            if (method.equals("PUT")) {
+                String lengthValue = headers.get("content-length");
+                if (headers.containsKey("transfer-encoding") || lengthValue == null
+                    || !lengthValue.matches("[0-9]{1,5}")) {
+                    reply(conn, output, 400, "Bad Request", "application/json; charset=utf-8",
+                        bytes("{\"error\":\"content-length-required\"}"), false, "");
+                    return;
+                }
+                int length = Integer.parseInt(lengthValue);
+                if (length > 4096) {
+                    reply(conn, output, 413, "Content Too Large", "application/json; charset=utf-8",
+                        bytes("{\"error\":\"body-too-large\"}"), false, "");
+                    return;
+                }
+                if (!"application/x-www-form-urlencoded".equalsIgnoreCase(headers.get("content-type"))) {
+                    reply(conn, output, 415, "Unsupported Media Type", "application/json; charset=utf-8",
+                        bytes("{\"error\":\"form-urlencoded-required\"}"), false, "");
+                    return;
+                }
+                body = new byte[length];
+                int offset = 0;
+                while (offset < length) {
+                    long remaining = requestDeadline - System.nanoTime();
+                    if (remaining <= 0) throw new SocketTimeoutException("Request deadline exceeded.");
+                    conn.socket.setSoTimeout((int) Math.max(1, remaining / 1000000L));
+                    int count = conn.socket.getInputStream().read(body, offset, length - offset);
+                    if (count < 0) throw new IOException("Incomplete request body.");
+                    offset += count;
+                }
+            } else if (headers.containsKey("content-length") || headers.containsKey("transfer-encoding")) {
+                reply(conn, output, 400, "Bad Request", "application/json; charset=utf-8",
+                    bytes("{\"error\":\"unexpected-request-body\"}"), false, "");
+                return;
+            }
+            ApiResult result = adminApi.handle(method, path, body);
+            reply(conn, output, result.status, result.reason, "application/json; charset=utf-8",
+                result.body, false, "");
         }
 
         void serveSnapshot(Conn conn, OutputStream output, boolean head, String method) throws IOException {
@@ -329,7 +528,8 @@ public final class SnapshotHttpServer {
          */
         void serveStream(Conn conn, InputStream input, OutputStream output, boolean head) throws IOException {
             String headers = "HTTP/1.1 200 OK\r\nServer: ObservatoryNative/0.3\r\nContent-Type: multipart/x-mixed-replace; boundary=" + BOUNDARY
-                + "\r\nCache-Control: no-store, no-cache, must-revalidate, max-age=0\r\nPragma: no-cache\r\nExpires: 0\r\nX-Content-Type-Options: nosniff\r\nAllow: GET, HEAD\r\nConnection: close\r\n\r\n";
+                + "\r\nCache-Control: no-store, no-cache, must-revalidate, max-age=0\r\nPragma: no-cache\r\nExpires: 0\r\n"
+                + securityHeaders("") + "Allow: GET, HEAD\r\nConnection: close\r\n\r\n";
             if (head) {
                 conn.write(output, headers.getBytes(StandardCharsets.US_ASCII));
                 return;
@@ -404,12 +604,21 @@ public final class SnapshotHttpServer {
 
     private static byte[] bytes(String text) { return text.getBytes(StandardCharsets.UTF_8); }
 
+    private static String securityHeaders(String csp) {
+        String policy = csp.isEmpty()
+            ? "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" : csp;
+        return "X-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\n"
+            + "Permissions-Policy: camera=(), microphone=(), geolocation=()\r\n"
+            + "Cross-Origin-Resource-Policy: same-origin\r\n"
+            + "Content-Security-Policy: " + policy + "\r\n";
+    }
+
     private void reply(Session.Conn conn, OutputStream output, int code, String reason, String type, byte[] body, boolean head) throws IOException {
         reply(conn, output, code, reason, type, body, head, "");
     }
 
     private void reply(Session.Conn conn, OutputStream output, int code, String reason, String type, byte[] body, boolean head, String extra) throws IOException {
-        String header = "HTTP/1.1 " + code + " " + reason + "\r\nServer: ObservatoryNative/0.3\r\nContent-Type: " + type + "\r\nContent-Length: " + body.length + "\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n" + extra + "Allow: GET, HEAD\r\nConnection: close\r\n\r\n";
+        String header = "HTTP/1.1 " + code + " " + reason + "\r\nServer: ObservatoryNative/0.3\r\nContent-Type: " + type + "\r\nContent-Length: " + body.length + "\r\nCache-Control: no-store\r\n" + securityHeaders(extra) + "Allow: GET, HEAD, PUT\r\nConnection: close\r\n\r\n";
         conn.write(output, header.getBytes(StandardCharsets.US_ASCII));
         if (!head) conn.write(output, body);
     }

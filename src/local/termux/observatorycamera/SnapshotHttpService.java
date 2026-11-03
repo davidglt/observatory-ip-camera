@@ -76,12 +76,13 @@ public final class SnapshotHttpService extends Service {
             return;
         }
         if (server == null) {
-            server = new SnapshotHttpServer(new File(getFilesDir(), "snapshot.jpg"), message -> Log.i(TAG, message));
+            server = new SnapshotHttpServer(new File(getFilesDir(), "snapshot.jpg"), SnapshotHttpServer.DEFAULT_PORT,
+                message -> Log.i(TAG, message), new AdminTokenStore(getFilesDir()), new SnapshotAdminApi(this));
             server.setOnTerminated(() -> main.post(() -> {
                 if (server != null) fail("HTTP server thread ended unexpectedly.");
             }));
         }
-        Log.w(TAG, "HTTP is exposed on all IPv4 interfaces without authentication or TLS. Trusted networks only.");
+        Log.w(TAG, "HTTP is exposed on all IPv4 interfaces without TLS. Trusted LAN only; bearer token is plaintext on this network.");
         try {
             server.start();
         } catch (Exception e) {
@@ -89,7 +90,7 @@ public final class SnapshotHttpService extends Service {
             return;
         }
         manager.notify(NOTIFICATION_ID, buildNotification("Listening on port " + server.getLocalPort()
-            + ". No authentication or TLS: trusted LAN only."));
+            + ". Plaintext HTTP; viewer is public: trusted LAN only."));
         setState(true, null);
         Log.i(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "start", "listening", "port=" + server.getLocalPort()));
     }

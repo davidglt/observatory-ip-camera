@@ -22,8 +22,10 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.TimeZone;
 
 public final class MainActivity extends Activity {
@@ -85,7 +87,7 @@ public final class MainActivity extends Activity {
         stop.setOnClickListener(v -> stopServer());
         layout.addView(stop);
         TextView warning = new TextView(this);
-        warning.setText("HTTP on port 8080 has no authentication or TLS. Trusted LAN only.");
+        warning.setText("HTTP port 8080 is plaintext. Viewer/snapshots are public; settings require the admin token. Trusted LAN only.");
         layout.addView(warning);
         setContentView(layout);
         updateServerStatus();
@@ -268,11 +270,15 @@ public final class MainActivity extends Activity {
             StreamConfigurationMap map = info.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             Size[] sizes = map == null ? null : map.getOutputSizes(ImageFormat.JPEG);
             if (sizes == null || sizes.length == 0) throw new IllegalStateException("JPEG capture unavailable.");
-            Size size = sizes[0];
-            long target = 1280L * 720L;
-            for (Size candidate : sizes) {
-                if (Math.abs((long) candidate.getWidth() * candidate.getHeight() - target) < Math.abs((long) size.getWidth() * size.getHeight() - target)) size = candidate;
-            }
+            ArrayList<CameraCapabilities.JpegSize> jpegSizes = new ArrayList<>();
+            for (Size candidate : sizes) jpegSizes.add(new CameraCapabilities.JpegSize(candidate.getWidth(), candidate.getHeight(),
+                map.getOutputMinFrameDuration(ImageFormat.JPEG, candidate), map.getOutputStallDuration(ImageFormat.JPEG, candidate)));
+            CameraCapabilities capabilities = new CameraCapabilities(jpegSizes);
+            CaptureConfig captureConfig = CaptureSettings.load(this);
+            String invalid = capabilities.validate(captureConfig);
+            if (invalid != null) throw new IllegalArgumentException(invalid);
+            CameraCapabilities.JpegSize selectedSize = capabilities.select(captureConfig);
+            Size size = new Size(selectedSize.width, selectedSize.height);
             reader = ImageReader.newInstance(size.getWidth(), size.getHeight(), ImageFormat.JPEG, 2);
             worker = new HandlerThread("single-capture");
             worker.start();
@@ -286,12 +292,16 @@ public final class MainActivity extends Activity {
                     try (Image image = source.acquireLatestImage()) {
                         if (image == null) return;
                         ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+                        if (buffer.remaining() > CameraCapabilities.MAX_JPEG_BYTES)
+                            throw new IOException("JPEG exceeds the application byte limit.");
                         data = new byte[buffer.remaining()];
                         buffer.get(data);
                         imageWidth = image.getWidth();
                         imageHeight = image.getHeight();
                     }
                     FrameOverlay.Result r = FrameOverlay.process(data, CaptureSettings.load(this), Double.NaN, 1, wall, TimeZone.getDefault());
+                    if (r.jpeg.length > CameraCapabilities.MAX_JPEG_BYTES)
+                        throw new IOException("JPEG output exceeds the application byte limit.");
                     if (!SnapshotPublisher.publish(getFilesDir(), "snapshot.jpg", r.jpeg, () -> token == generation)) return;
                     Log.i(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "saved", "bytes=" + r.jpeg.length + " size=" + imageWidth + "x" + imageHeight + " overlay=" + (r.rendered ? "rendered" : "passthrough") + " processing_ms=" + r.processingNanos / 1_000_000L));
                     handler.post(() -> {
