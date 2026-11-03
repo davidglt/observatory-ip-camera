@@ -165,12 +165,11 @@ public final class ControlActivity extends Activity {
         CaptureConfig requested = CaptureSettings.load(this);
         Log.i(TAG, ControlCommand.line(command.requestId, command.name, "continuous-status",
             ContinuousCaptureService.getStatus().describe(SystemClock.elapsedRealtimeNanos())
-            + " requested_fps=" + requested.targetFpsString()
+            + " requested_target_fps=" + requested.targetFpsString()
             + " effective_target_fps=" + ContinuousCaptureService.effectiveTargetFps()
             + " desired_size=" + requested.jpegSize
             + " effective_size=" + ContinuousCaptureService.effectiveJpegSize()
             + " metadata_estimate_fps=" + ContinuousCaptureService.metadataEstimateFps()
-            + " application_cap_fps=" + ContinuousCaptureService.applicationCapFps()
             + " reload_error=" + (ContinuousCaptureService.reloadError() == null ? "none" : ContinuousCaptureService.reloadError().replaceAll("[^A-Za-z0-9_.:-]", "-"))
             + " camera=" + (camera ? "granted" : "denied") + " notifications=" + notificationState()
             + " owner=" + CameraArbiter.shared().owner()));

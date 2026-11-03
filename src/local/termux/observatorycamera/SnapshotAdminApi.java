@@ -57,10 +57,9 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
         out.append("},\"effective_size\":\"").append(json(ContinuousCaptureService.effectiveJpegSize()))
             .append("\",\"desired_size\":\"").append(json(config.jpegSize))
             .append("\",\"effective_target_fps\":\"").append(json(ContinuousCaptureService.effectiveTargetFps()))
-            .append("\",\"measured_fps\":\"")
-            .append(Double.isNaN(status.fps) ? "n/a" : String.format(java.util.Locale.ROOT, "%.2f", status.fps))
+            .append("\",\"actual_fps\":\"")
+            .append(Double.isNaN(status.actualFps) ? "n/a" : String.format(java.util.Locale.ROOT, "%.2f", status.actualFps))
             .append("\",\"metadata_estimate_fps\":\"").append(json(ContinuousCaptureService.metadataEstimateFps()))
-            .append("\",\"application_cap_fps\":\"").append(json(ContinuousCaptureService.applicationCapFps()))
             .append("\",\"capture_state\":\"").append(json(status.state))
             .append("\",\"reload_error\":\"").append(json(ContinuousCaptureService.reloadError() == null ? "" : ContinuousCaptureService.reloadError()))
             .append("\",\"file_state\":\"").append(json(CaptureSettings.store(context).load().fileState)).append("\"");
@@ -75,19 +74,15 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
     private String capabilitiesJson(CameraCapabilities capabilities) {
         CaptureConfig automatic = CaptureConfig.defaults();
         CameraCapabilities.JpegSize autoSize = capabilities.select(automatic);
-        boolean autoSupported = (long) autoSize.width * autoSize.height <= CameraCapabilities.MAX_JPEG_PIXELS
-            && capabilities.applicationCapFpsTenths(automatic) >= CaptureConfig.MIN_FPS_TENTHS;
-        StringBuilder out = new StringBuilder("{\"application_limit_fps\":\"3.0\",\"auto_size\":\"")
+        boolean autoSupported = (long) autoSize.width * autoSize.height <= CameraCapabilities.MAX_JPEG_PIXELS;
+        StringBuilder out = new StringBuilder("{\"auto_size\":\"")
             .append(autoSize.value()).append("\",\"auto_supported\":").append(autoSupported).append(",\"sizes\":[");
         boolean first = true;
         for (CameraCapabilities.JpegSize size : capabilities.sizes()) {
             if (!first) out.append(',');
             first = false;
-            int estimate = size.metadataEstimateFpsTenths();
-            CaptureConfig sizeConfig = new CaptureConfigForSize(size.value()).config();
-            int cap = capabilities.applicationCapFpsTenths(sizeConfig);
-            boolean supported = (long) size.width * size.height <= CameraCapabilities.MAX_JPEG_PIXELS
-                && cap >= CaptureConfig.MIN_FPS_TENTHS;
+            long estimate = size.metadataEstimateFpsTenths();
+            boolean supported = (long) size.width * size.height <= CameraCapabilities.MAX_JPEG_PIXELS;
             out.append("{\"size\":\"").append(size.value())
                 .append("\",\"application_supported\":").append(supported)
                 .append(",\"min_frame_duration_ns\":")
@@ -95,18 +90,9 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
                 .append(",\"jpeg_stall_duration_ns\":")
                 .append(size.stallDurationNanos >= 0 ? Long.toString(size.stallDurationNanos) : "null")
                 .append(",\"estimate_fps\":\"").append(size.hasTimingEstimate() ? CameraCapabilities.formatFps(estimate) : "unknown")
-                .append("\",\"application_cap_fps\":\"").append(supported ? CameraCapabilities.formatFps(cap) : "unsupported").append("\"}");
+                .append("\"}");
         }
         return out.append("]}").toString();
-    }
-
-    private static final class CaptureConfigForSize {
-        private final String size;
-        CaptureConfigForSize(String size) { this.size = size; }
-        CaptureConfig config() {
-            CaptureConfig.Parsed parsed = CaptureConfig.parse("jpeg_size=" + size, CaptureConfig.defaults());
-            return parsed.config;
-        }
     }
 
     private static Map<String, String> decodeForm(byte[] body) throws CharacterCodingException {

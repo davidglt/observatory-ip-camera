@@ -18,8 +18,8 @@ public final class ContinuousStatus {
 
     public final String state;
     public final long frames;
-    public final double fps;
-    public final int targetFpsTenths;
+    public final double actualFps;
+    public final long targetFpsTenths;
     public final long sessionStartNanos;
     public final long lastCaptureNanos;
     public final long lastCaptureWallMillis;
@@ -33,13 +33,13 @@ public final class ContinuousStatus {
     public final long failures;
     public final String lastError;
 
-    public ContinuousStatus(String state, long frames, double fps, int targetFpsTenths, long sessionStartNanos,
+    public ContinuousStatus(String state, long frames, double actualFps, long targetFpsTenths, long sessionStartNanos,
                             long lastCaptureNanos, long lastCaptureWallMillis, String zoneId, long procLastNanos,
                             long procAvgNanos, long procMaxNanos, long lastBytes, String overlayMode, long late,
                             long failures, String lastError) {
         this.state = state;
         this.frames = frames;
-        this.fps = fps;
+        this.actualFps = actualFps;
         this.targetFpsTenths = targetFpsTenths;
         this.sessionStartNanos = sessionStartNanos;
         this.lastCaptureNanos = lastCaptureNanos;
@@ -60,7 +60,7 @@ public final class ContinuousStatus {
     }
 
     public ContinuousStatus withState(String newState, String error) {
-        return new ContinuousStatus(newState, frames, fps, targetFpsTenths, sessionStartNanos, lastCaptureNanos,
+        return new ContinuousStatus(newState, frames, actualFps, targetFpsTenths, sessionStartNanos, lastCaptureNanos,
             lastCaptureWallMillis, zoneId, procLastNanos, procAvgNanos, procMaxNanos, lastBytes, overlayMode, late, failures, error);
     }
 
@@ -71,7 +71,7 @@ public final class ContinuousStatus {
         StringBuilder sb = new StringBuilder();
         sb.append("state=").append(state);
         sb.append(" frames=").append(frames);
-        sb.append(" fps=").append(Double.isNaN(fps) ? "n/a" : String.format(Locale.ROOT, "%.2f", fps));
+        sb.append(" actual_fps=").append(Double.isNaN(actualFps) ? "n/a" : String.format(Locale.ROOT, "%.2f", actualFps));
         sb.append(" target_fps=").append(String.format(Locale.ROOT, "%d.%d", targetFpsTenths / 10, targetFpsTenths % 10));
         if (sessionStartNanos >= 0) sb.append(" uptime_s=").append(String.format(Locale.ROOT, "%.1f", Math.max(0, nowNanos - sessionStartNanos) / 1e9));
         if (lastCaptureNanos < 0) {

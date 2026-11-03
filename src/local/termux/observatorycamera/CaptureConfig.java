@@ -34,11 +34,9 @@ public final class CaptureConfig {
     public static final String[] POSITIONS = {"bottom-left", "bottom-right", "top-left", "top-right"};
     public static final int MIN_TEXT_SIZE = 10;
     public static final int MAX_TEXT_SIZE = 96;
-    public static final int MIN_FPS_TENTHS = 1;
-    public static final int MAX_FPS_TENTHS = 30;
     public static final int MAX_ASSIGNMENTS_LENGTH = 200;
     private static final Pattern LOCATION_PATTERN = Pattern.compile("[\\p{L}\\p{N}_.-]([\\p{L}\\p{N} _.-]*[\\p{L}\\p{N}_.-])?");
-    private static final Pattern FPS_PATTERN = Pattern.compile("[0-9](\\.[0-9])?");
+    private static final Pattern FPS_PATTERN = Pattern.compile("[0-9]+(\\.[0-9])?");
     private static final Pattern JPEG_SIZE_PATTERN = Pattern.compile("[1-9][0-9]{0,4}x[1-9][0-9]{0,4}");
     private static final String[] FIELD_NAMES = {"location", "datetime", "fps", "frames"};
 
@@ -47,10 +45,10 @@ public final class CaptureConfig {
     public final String position;
     public final int textSize;
     public final int fields;
-    public final int targetFpsTenths;
+    public final long targetFpsTenths;
     public final String jpegSize;
 
-    private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields, int targetFpsTenths, String jpegSize) {
+    private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields, long targetFpsTenths, String jpegSize) {
         this.overlayEnabled = overlayEnabled;
         this.location = location;
         this.position = position;
@@ -79,7 +77,7 @@ public final class CaptureConfig {
         String position;
         int textSize;
         int fields;
-        int fps;
+        long fps;
         String jpegSize;
         Draft(CaptureConfig c) {
             overlay = c.overlayEnabled; location = c.location; position = c.position;
@@ -118,8 +116,10 @@ public final class CaptureConfig {
                 return null;
             }
             case TARGET_FPS: {
-                int tenths = parseFpsTenths(value);
-                if (tenths < MIN_FPS_TENTHS || tenths > MAX_FPS_TENTHS) return "invalid-target_fps:expected-0.1-to-3.0";
+                long tenths = parseFpsTenths(value);
+                if (tenths == -1) return "invalid-target_fps:expected-positive-number-with-at-most-one-decimal";
+                if (tenths == -2) return "invalid-target_fps:outside-representable-range";
+                if (tenths == 0) return "invalid-target_fps:must-be-positive";
                 d.fps = tenths;
                 return null;
             }
@@ -196,8 +196,8 @@ public final class CaptureConfig {
     }
 
     public boolean hasField(int flag) { return (fields & flag) != 0; }
-    public double targetFps() { return targetFpsTenths / 10.0; }
-    public long targetIntervalNanos() { return 1_000_000_000L * 10L / targetFpsTenths; }
+    public double targetFps() { return (double) targetFpsTenths / 10.0; }
+    public long targetIntervalNanos() { return Math.max(1L, 10_000_000_000L / targetFpsTenths); }
     public String targetFpsString() { return String.format(Locale.ROOT, "%d.%d", targetFpsTenths / 10, targetFpsTenths % 10); }
 
     public String fieldsString() {
@@ -227,10 +227,19 @@ public final class CaptureConfig {
         return mask;
     }
 
-    private static int parseFpsTenths(String value) {
+    private static long parseFpsTenths(String value) {
         if (!FPS_PATTERN.matcher(value).matches()) return -1;
         int dot = value.indexOf('.');
-        return dot < 0 ? Integer.parseInt(value) * 10 : Integer.parseInt(value.substring(0, dot)) * 10 + Integer.parseInt(value.substring(dot + 1));
+        int fractional = dot < 0 ? 0 : value.charAt(dot + 1) - '0';
+        int end = dot < 0 ? value.length() : dot;
+        long whole = 0;
+        for (int i = 0; i < end; i++) {
+            int digit = value.charAt(i) - '0';
+            if (whole > (Long.MAX_VALUE - digit) / 10) return -2;
+            whole = whole * 10 + digit;
+        }
+        if (whole > (Long.MAX_VALUE - fractional) / 10) return -2;
+        return whole * 10 + fractional;
     }
 
     private static int parseInt(String value) {

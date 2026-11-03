@@ -68,14 +68,12 @@ public final class ContinuousCaptureService extends Service {
     private static volatile String effectiveJpegSize = "n/a";
     private static volatile String effectiveTargetFps = "n/a";
     private static volatile String metadataEstimateFps = "unknown";
-    private static volatile String applicationCapFps = "3.0";
     private static volatile String reloadError;
 
     public static ContinuousStatus getStatus() { return status; }
     public static String effectiveJpegSize() { return effectiveJpegSize; }
     public static String effectiveTargetFps() { return effectiveTargetFps; }
     public static String metadataEstimateFps() { return metadataEstimateFps; }
-    public static String applicationCapFps() { return applicationCapFps; }
     public static String reloadError() { return reloadError; }
     public static boolean isActive() { return status.isActive(); }
     public static void setListener(Listener value) { listener = value; }
@@ -166,7 +164,6 @@ public final class ContinuousCaptureService extends Service {
         effectiveJpegSize = "unknown";
         effectiveTargetFps = "unknown";
         metadataEstimateFps = "unknown";
-        applicationCapFps = "3.0";
         lastAngle = -1;
         publish(snapshot(ContinuousStatus.STARTING, null), true);
         try {
@@ -250,10 +247,8 @@ public final class ContinuousCaptureService extends Service {
                     activeConfig = configuredConfig;
                     effectiveJpegSize = configuredSize.value();
                     effectiveTargetFps = configuredConfig.targetFpsString();
-                    int estimate = configuredSize.metadataEstimateFpsTenths();
+                    long estimate = configuredSize.metadataEstimateFpsTenths();
                     metadataEstimateFps = configuredSize.hasTimingEstimate() ? CameraCapabilities.formatFps(estimate) : "unknown";
-                    applicationCapFps = CameraCapabilities.formatFps(capabilities.applicationCapFpsTenths(
-                        CaptureSettings.load(ContinuousCaptureService.this)));
                     reloadError = null;
                     try {
                         builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
@@ -326,16 +321,17 @@ public final class ContinuousCaptureService extends Service {
         activeConfig = requested;
         effectiveTargetFps = requested.targetFpsString();
         if (effectiveSize != null) {
-            int estimate = effectiveSize.metadataEstimateFpsTenths();
+            long estimate = effectiveSize.metadataEstimateFpsTenths();
             metadataEstimateFps = effectiveSize.hasTimingEstimate() ? CameraCapabilities.formatFps(estimate) : "unknown";
-            applicationCapFps = CameraCapabilities.formatFps(capabilities.applicationCapFpsTenths(requested));
         }
         long interval = requested.targetIntervalNanos();
         long elapsed = now - captureStartNanos;
         if (success) {
             consecutiveFailures = 0;
             if (elapsed > interval) stats.recordLate();
-            cameraHandler.postDelayed(() -> captureNext(gen), Math.max(0, interval - elapsed) / 1_000_000L);
+            long remaining = Math.max(0, interval - elapsed);
+            long delayMillis = remaining / 1_000_000L + (remaining % 1_000_000L == 0 ? 0 : 1);
+            cameraHandler.postDelayed(() -> captureNext(gen), delayMillis);
         } else {
             cameraHandler.postDelayed(() -> captureNext(gen), FAILURE_RETRY_MS);
         }
@@ -438,7 +434,7 @@ public final class ContinuousCaptureService extends Service {
 
     private void publishFrame(long wall, String zone) {
         ContinuousStatus s = snapshot(ContinuousStatus.RUNNING, null);
-        publish(new ContinuousStatus(s.state, s.frames, s.fps, s.targetFpsTenths, s.sessionStartNanos, s.lastCaptureNanos, wall, zone,
+        publish(new ContinuousStatus(s.state, s.frames, s.actualFps, s.targetFpsTenths, s.sessionStartNanos, s.lastCaptureNanos, wall, zone,
             s.procLastNanos, s.procAvgNanos, s.procMaxNanos, s.lastBytes, s.overlayMode, s.late, s.failures, null), false);
     }
 
