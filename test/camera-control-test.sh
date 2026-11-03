@@ -5,6 +5,9 @@ cd "$(dirname "$0")/.."
 T=$(mktemp -d)
 trap 'kill ${SRV:-} 2>/dev/null; rm -rf "$T"' EXIT
 export FAKE_LOG="$T/calls" FAKE_STATE="$T/state"
+. "$PWD/test/hermetic-path.sh"
+hermetic_path "$T/stdtools"
+export PATH="$T/stdtools"
 : > "$FAKE_LOG"
 cat > "$T/adb" <<'FAKE'
 #!/usr/bin/env bash

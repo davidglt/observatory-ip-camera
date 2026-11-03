@@ -42,7 +42,12 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$T/bin/keytool"
 chmod +x "$T/bin"/*
 printf "dist/\nbuild/\n" > "$R/.gitignore"
 git -C "$R" init -q -b main && git -C "$R" add -A && git -C "$R" -c user.name=t -c user.email=t@t commit -qm init
-export PATH="$T/bin:$PATH" HOME="$T/home" ADB="$T/bin/adb" DEPLOY_STATE_DIR="$T/state"
+. "$ROOT/test/hermetic-path.sh"
+SENTINEL_LOG="$T/sentinel-calls"; : > "$SENTINEL_LOG"
+hermetic_sentinels "$T/installed" "$SENTINEL_LOG"
+PATH="$T/installed:$PATH"   # simulates a user's installed real tools in the inherited PATH
+hermetic_path "$T/stdtools"
+export PATH="$T/bin:$T/stdtools" HOME="$T/home" ADB="$T/bin/adb" DEPLOY_STATE_DIR="$T/state"
 export FAKE_LOG="$T/calls" FAKE_DEVICES="$T/devices" FAKE_MDNS="$T/mdns" FAKE_WIRELESS_LOG="$T/wireless-calls"
 unset TARGET
 SIGN="$HOME/.local/share/observatory-ip-camera/signing"
@@ -154,4 +159,5 @@ reset; : > "$FAKE_DEVICES"; printf 'List\nservice\t_adb-tls-connect._tcp.\t192.1
 check "deploy forwards mDNS discovery" 0 'result: SUCCESS' --mdns
 grep -qx 'connect 192.168.1.20:41234' "$FAKE_LOG" && echo "ok: deploy forwarded mDNS discovery" || { echo "FAIL: deploy did not forward mDNS"; fails=$((fails+1)); }
 check "unknown option" 2 'unknown option' --bogus
+[[ ! -s $SENTINEL_LOG ]] && echo "ok: installed real tools in inherited PATH were never invoked" || { echo "FAIL: installed tool invoked"; cat "$SENTINEL_LOG"; fails=$((fails+1)); }
 exit $(( fails > 0 ))
