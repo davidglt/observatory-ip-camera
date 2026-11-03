@@ -2,6 +2,7 @@ package local.termux.observatorycamera;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.NotificationManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
@@ -9,6 +10,7 @@ import android.hardware.camera2.*;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.util.Log;
@@ -34,6 +36,9 @@ public final class MainActivity extends Activity {
     private boolean resumed;
     private boolean capturePending;
     private boolean permissionRequested;
+    private TextView serverStatus;
+    private boolean serverStartPending;
+    private boolean notificationPermissionRequested;
     private static final String STATE_DEVICE_ORIENTATION = "deviceOrientation";
     private OrientationEventListener orientationListener;
     private int lastValidDeviceOrientation = -1;
@@ -62,7 +67,23 @@ public final class MainActivity extends Activity {
         capture.setText("Capture JPEG");
         capture.setOnClickListener(v -> requestCapture());
         layout.addView(capture);
+        serverStatus = new TextView(this);
+        serverStatus.setTextSize(16);
+        serverStatus.setPadding(0, p, 0, 0);
+        layout.addView(serverStatus);
+        Button start = new Button(this);
+        start.setText("Start server");
+        start.setOnClickListener(v -> requestServerStart());
+        layout.addView(start);
+        Button stop = new Button(this);
+        stop.setText("Stop server");
+        stop.setOnClickListener(v -> stopServer());
+        layout.addView(stop);
+        TextView warning = new TextView(this);
+        warning.setText("HTTP on port 8080 has no authentication or TLS. Trusted LAN only.");
+        layout.addView(warning);
         setContentView(layout);
+        updateServerStatus();
         report("Observatory IP Camera 0.2.0\nReady. No network streaming.");
     }
 
@@ -71,8 +92,63 @@ public final class MainActivity extends Activity {
         resumed = true;
         if (orientationListener.canDetectOrientation()) orientationListener.enable();
         else Log.w(TAG, "Device orientation sensor unavailable; JPEG orientation will use the fallback.");
+        SnapshotHttpService.setListener(this::updateServerStatus);
+        updateServerStatus();
+        tryPendingServerStart();
         consumeCaptureIntent();
         tryPendingCapture();
+    }
+
+    private void updateServerStatus() {
+        String error = SnapshotHttpService.getLastError();
+        if (SnapshotHttpService.isRunning()) serverStatus.setText("HTTP server: running on port 8080.");
+        else if (error != null) serverStatus.setText("HTTP server: stopped. " + error);
+        else serverStatus.setText("HTTP server: stopped.");
+    }
+
+    private boolean notificationsAllowed() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
+        return getSystemService(NotificationManager.class).areNotificationsEnabled();
+    }
+
+    private void requestServerStart() {
+        if (!resumed) return;
+        if (SnapshotHttpService.isRunning()) { updateServerStatus(); return; }
+        if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionRequested
+            && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermissionRequested = true;
+            serverStartPending = true;
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2);
+            return;
+        }
+        launchServer();
+    }
+
+    private void tryPendingServerStart() {
+        if (!serverStartPending || notificationPermissionRequested || !resumed) return;
+        serverStartPending = false;
+        launchServer();
+    }
+
+    private void launchServer() {
+        serverStartPending = false;
+        if (!notificationsAllowed()) {
+            serverStatus.setText("HTTP server: not started. Notifications are blocked for this app; allow them in system settings so the Stop notification can be shown.");
+            return;
+        }
+        try {
+            startForegroundService(new Intent(this, SnapshotHttpService.class).setAction(SnapshotHttpService.ACTION_START));
+            serverStatus.setText("HTTP server: start requested...");
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Could not start HTTP service", e);
+            serverStatus.setText("HTTP server: could not start. " + e);
+        }
+    }
+
+    private void stopServer() {
+        serverStartPending = false;
+        stopService(new Intent(this, SnapshotHttpService.class));
+        updateServerStatus();
     }
 
     @Override protected void onSaveInstanceState(Bundle state) {
@@ -127,6 +203,16 @@ public final class MainActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
+        if (request == 2) {
+            notificationPermissionRequested = false;
+            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+                tryPendingServerStart();
+            } else {
+                serverStartPending = false;
+                serverStatus.setText("HTTP server: not started. Notification permission denied; it is required so the running server stays visible and stoppable.");
+            }
+            return;
+        }
         if (request != 1) return;
         permissionRequested = false;
         if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
@@ -234,6 +320,7 @@ public final class MainActivity extends Activity {
         if (capturePending) report("Pending capture cancelled: activity paused.");
         capturePending = false;
         orientationListener.disable();
+        SnapshotHttpService.setListener(null);
         closeCapture();
         super.onPause();
     }

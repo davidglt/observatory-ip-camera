@@ -1,14 +1,17 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.termux.observatorycamera" android:versionCode="3" android:versionName="0.3.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.termux.observatorycamera" android:versionCode="4" android:versionName="0.4.0">
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="33" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera.any" android:required="true" />
-    <application android:name=".CameraApplication" android:label="Observatory IP Camera" android:allowBackup="false" android:debuggable="true" android:supportsRtl="true">
+    <application android:label="Observatory IP Camera" android:allowBackup="false" android:debuggable="true" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service android:name=".SnapshotHttpService" android:exported="false" />
     </application>
 </manifest>
