@@ -2,6 +2,7 @@ package local.termux.observatorycamera;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.hardware.camera2.*;
@@ -29,6 +30,9 @@ public final class MainActivity extends Activity {
     private ImageReader reader;
     private int generation;
     private boolean busy;
+    private boolean resumed;
+    private boolean capturePending;
+    private boolean permissionRequested;
     private final Runnable timeout = () -> fail("Capture timed out.");
 
     @Override public void onCreate(Bundle state) {
@@ -50,33 +54,65 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        resumed = true;
+        consumeCaptureIntent();
+        tryPendingCapture();
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        consumeCaptureIntent();
+        tryPendingCapture();
+    }
+
+    private void consumeCaptureIntent() {
         if (getIntent().getBooleanExtra("capture", false)) {
             getIntent().removeExtra("capture");
-            requestCapture();
+            if (!busy) capturePending = true;
         }
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) tryPendingCapture();
     }
 
     private void requestCapture() {
         if (busy) return;
+        capturePending = true;
+        tryPendingCapture();
+    }
+
+    private void tryPendingCapture() {
+        if (!capturePending || busy || permissionRequested || isFinishing()) return;
+        if (!resumed || !hasWindowFocus()) {
+            report("Capture pending: waiting for a resumed activity with window focus.");
+            return;
+        }
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            permissionRequested = true;
             requestPermissions(new String[]{Manifest.permission.CAMERA}, 1);
             return;
         }
+        capturePending = false;
         startCapture();
     }
 
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
         if (request != 1) return;
-        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) startCapture();
-        else report("Camera permission denied.");
+        permissionRequested = false;
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+            // A paused activity cancels its pending request; do not revive it here.
+            tryPendingCapture();
+        } else {
+            capturePending = false;
+            report("Camera permission denied.");
+        }
     }
 
     private void startCapture() {
-        if (busy || isFinishing() || !hasWindowFocus()) {
-            report("Capture requires a visible, focused activity. Try again after unlocking the phone.");
-            return;
-        }
         busy = true;
         final int token = ++generation;
         handler.postDelayed(timeout, 15000);
@@ -158,5 +194,11 @@ public final class MainActivity extends Activity {
         if (reader != null) { reader.close(); reader = null; }
         busy = false;
     }
-    @Override protected void onPause() { closeCapture(); super.onPause(); }
+    @Override protected void onPause() {
+        resumed = false;
+        if (capturePending) report("Pending capture cancelled: activity paused.");
+        capturePending = false;
+        closeCapture();
+        super.onPause();
+    }
 }
