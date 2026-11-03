@@ -13,6 +13,7 @@ import android.media.ImageReader;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.util.Log;
 import android.view.OrientationEventListener;
 import android.util.Size;
@@ -23,6 +24,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.ByteBuffer;
 import java.util.Collections;
+import java.util.TimeZone;
 
 public final class MainActivity extends Activity {
     private static final String TAG = "ObservatoryCamera";
@@ -31,6 +33,7 @@ public final class MainActivity extends Activity {
     private CameraDevice camera;
     private CameraCaptureSession session;
     private ImageReader reader;
+    private HandlerThread worker;
     private int generation;
     private boolean busy;
     private boolean resumed;
@@ -244,6 +247,12 @@ public final class MainActivity extends Activity {
     }
 
     private void startCapture() {
+        if (!CameraArbiter.shared().acquire(CameraArbiter.SINGLE)) {
+            String owner = CameraArbiter.shared().owner();
+            Log.e(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "failed", "reason=camera-busy owner=" + owner));
+            report("Camera is busy (owner: " + owner + "); not opening a second camera.");
+            return;
+        }
         busy = true;
         final int token = ++generation;
         handler.postDelayed(timeout, 15000);
@@ -265,22 +274,33 @@ public final class MainActivity extends Activity {
                 if (Math.abs((long) candidate.getWidth() * candidate.getHeight() - target) < Math.abs((long) size.getWidth() * size.getHeight() - target)) size = candidate;
             }
             reader = ImageReader.newInstance(size.getWidth(), size.getHeight(), ImageFormat.JPEG, 2);
+            worker = new HandlerThread("single-capture");
+            worker.start();
             reader.setOnImageAvailableListener(source -> {
                 if (token != generation) return;
-                try (Image image = source.acquireLatestImage()) {
-                    if (image == null) return;
-                    ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-                    byte[] data = new byte[buffer.remaining()];
-                    buffer.get(data);
-                    File pending = new File(getFilesDir(), "snapshot.tmp");
-                    try (FileOutputStream out = new FileOutputStream(pending)) { out.write(data); }
-                    File destination = new File(getFilesDir(), "snapshot.jpg");
-                    if (!pending.renameTo(destination)) throw new java.io.IOException("Could not publish snapshot.");
-                    Log.i(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "saved", "bytes=" + data.length + " size=" + image.getWidth() + "x" + image.getHeight()));
-                    report("Snapshot saved: " + image.getWidth() + "x" + image.getHeight() + ", " + data.length + " bytes. File: snapshot.jpg");
-                    handler.post(() -> { if (token == generation) closeCapture(); });
-                } catch (Exception e) { fail(e.toString()); }
-            }, handler);
+                long wall = System.currentTimeMillis();
+                try {
+                    byte[] data;
+                    int imageWidth;
+                    int imageHeight;
+                    try (Image image = source.acquireLatestImage()) {
+                        if (image == null) return;
+                        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+                        data = new byte[buffer.remaining()];
+                        buffer.get(data);
+                        imageWidth = image.getWidth();
+                        imageHeight = image.getHeight();
+                    }
+                    FrameOverlay.Result r = FrameOverlay.process(data, CaptureSettings.load(this), Double.NaN, 1, wall, TimeZone.getDefault());
+                    if (!SnapshotPublisher.publish(getFilesDir(), "snapshot.jpg", r.jpeg, () -> token == generation)) return;
+                    Log.i(ControlCommand.LOG_TAG, ControlCommand.line(captureId, "capture", "saved", "bytes=" + r.jpeg.length + " size=" + imageWidth + "x" + imageHeight + " overlay=" + (r.rendered ? "rendered" : "passthrough") + " processing_ms=" + r.processingNanos / 1_000_000L));
+                    handler.post(() -> {
+                        if (token != generation) return;
+                        report("Snapshot saved: " + imageWidth + "x" + imageHeight + ", " + r.jpeg.length + " bytes. File: snapshot.jpg");
+                        closeCapture();
+                    });
+                } catch (Exception e) { handler.post(() -> { if (token == generation) fail(e.toString()); }); }
+            }, new Handler(worker.getLooper()));
             final Integer sensorValue = info.get(CameraCharacteristics.SENSOR_ORIENTATION);
             final int sensorOrientation = sensorValue == null ? 0 : sensorValue;
             final boolean frontFacing = Integer.valueOf(CameraCharacteristics.LENS_FACING_FRONT).equals(info.get(CameraCharacteristics.LENS_FACING));
@@ -336,7 +356,9 @@ public final class MainActivity extends Activity {
         handler.removeCallbacks(timeout);
         if (session != null) { session.close(); session = null; }
         if (camera != null) { camera.close(); camera = null; }
-        if (reader != null) { reader.close(); reader = null; }
+        if (reader != null) { reader.setOnImageAvailableListener(null, null); reader.close(); reader = null; }
+        if (worker != null) { worker.quitSafely(); worker = null; }
+        if (busy) CameraArbiter.shared().release(CameraArbiter.SINGLE);
         busy = false;
     }
     @Override protected void onPause() {
