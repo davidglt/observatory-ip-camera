@@ -83,6 +83,34 @@ export FAKE_PORT=1
 FAKE_LOGLINE="cmd=status result=status running=false port=8080 camera=granted notifications=ok lastError=Could not listen" expect status-start-failure 3 "start failure" -s T --no-wake --timeout 5 status
 FAKE_LOGLINE="cmd=status result=status running=false port=8080 camera=granted notifications=ok" expect status-stopped 4 "STOPPED" -s T --no-wake --timeout 5 status
 FAKE_LOGLINE="cmd=stop result=stop-requested running=false" expect stop-ok 0 "STOPPED" -s T --no-wake --timeout 5 stop
+# Continuous capture and settings.
+FAKE_LOGLINE="cmd=continuous-start result=started state=running" expect cstart-ok 0 "STARTED" -s T --no-wake --timeout 5 continuous-start
+FAKE_LOGLINE="cmd=continuous-start result=started already=true state=running" expect cstart-idempotent 0 "STARTED" -s T --no-wake --timeout 5 continuous-start
+FAKE_LOGLINE="cmd=continuous-start result=failed reason=camera-busy owner=single-capture" expect cstart-busy 7 "already in use" -s T --no-wake --timeout 5 continuous-start
+FAKE_LOGLINE="cmd=continuous-start result=failed reason=camera-permission-missing" expect cstart-perm 11 "camera-permission-missing" -s T --no-wake --timeout 5 continuous-start
+FAKE_LOGLINE="cmd=continuous-start result=failed reason=Camera error: 2" expect cstart-error 3 "Camera error" -s T --no-wake --timeout 5 continuous-start
+FAKE_LOGLINE="cmd=continuous-start result=deferred reason=activity-not-resumed" expect cstart-deferred 5 "never resumed" -s T --no-wake --timeout 2 continuous-start
+FAKE_CAM=false expect cstart-cam-denied 11 "CAMERA is not granted" -s T continuous-start
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=running frames=12 fps=0.98 target_fps=1.0 last_capture=2026-01-01T00:00:00+0000 tz=UTC age_ms=412" expect cstatus-running 0 "RUNNING.*measured" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=running frames=0 fps=n/a target_fps=1.0 last_capture=none age_ms=none" expect cstatus-no-frame 0 "no recent frame" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=running frames=5 fps=1.00 target_fps=1.0 last_capture=x tz=UTC age_ms=60000" expect cstatus-stale 0 "no recent frame" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=stopped frames=3 fps=1.00 target_fps=1.0 last_capture=none age_ms=none" expect cstatus-stopped 4 "STOPPED" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=error frames=0 fps=n/a target_fps=1.0 last_capture=none age_ms=none lastError=Camera disconnected." expect cstatus-error 3 "Camera disconnected" -s T --no-wake --timeout 5 continuous-status
+FAKE_LOGLINE="cmd=continuous-stop result=stop-requested state=running" expect cstop-timeout 5 "still active|Timeout" -s T --no-wake --timeout 2 continuous-stop
+FAKE_LOGLINE="cmd=capture result=failed reason=camera-busy owner=continuous" expect capture-busy 7 "owned by another mode" -s T --no-wake --timeout 5 capture
+FAKE_LOGLINE="cmd=config-show result=config overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps,frames target_fps=1.0" expect config-show 0 "location=NYX" -s T --no-wake --timeout 5 config-show
+FAKE_LOGLINE="cmd=config-set result=config overlay=off applied=next-frame" expect config-set 0 "overlay=off" -s T --no-wake --timeout 5 config-set overlay=off
+grep -q -- "--es config 'overlay=off'" "$FAKE_LOG" && echo "ok config passed single-quoted" || { echo "FAIL config quoting"; fails=$((fails+1)); }
+FAKE_LOGLINE="cmd=config-set result=failed reason=invalid-config:invalid-text_size:expected-10-96" expect config-set-rejected 2 "nothing changed" -s T --no-wake --timeout 5 config-set text_size=5
+FAKE_LOGLINE="cmd=config-reset result=config overlay=on applied=next-frame" expect config-reset 0 "overlay=on" -s T --no-wake --timeout 5 config-reset
+n=$(wc -l < "$FAKE_LOG")
+expect config-injection 2 "Invalid assignment" -s T config-set 'overlay=on;reboot'
+expect config-injection-sub 2 "Invalid assignment" -s T config-set 'location=$(id)'
+expect config-space 2 "Invalid assignment|Unknown" -s T config-set "location=a b"
+expect config-empty 2 "needs at least one" -s T config-set
+expect assignment-elsewhere 2 "only valid after config-set" -s T status overlay=on
+expect config-too-long 2 "too long" -s T config-set "location=$(printf 'a%.0s' $(seq 1 120))" "fields=$(printf 'b%.0s' $(seq 1 120))"
+[[ $(wc -l < "$FAKE_LOG") -eq $n ]] && echo "ok rejected input made no adb call" || { echo "FAIL adb called for rejected input"; fails=$((fails+1)); }
 grep -q -- ' -S' "$FAKE_LOG" && { echo "FAIL am start -S used"; fails=$((fails+1)); } || echo "ok no am start -S"
 grep -q force-stop "$FAKE_LOG" && { echo "FAIL force-stop used"; fails=$((fails+1)); } || echo "ok no force-stop"
 [[ ! -e $FAKE_LOG.bad ]] && echo "ok every adb call had -s" || { echo "FAIL adb without -s"; fails=$((fails+1)); }

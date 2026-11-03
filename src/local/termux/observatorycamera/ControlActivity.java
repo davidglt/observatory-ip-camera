@@ -7,6 +7,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 
 /**
@@ -16,12 +19,19 @@ import android.util.Log;
  * callers. Same-UID code and any app granted DUMP remain able to call it. The request id is only a log
  * correlation token, never authentication. Never prompts for permissions. The foreground service is
  * started only while this activity is resumed; otherwise the start is deferred until onResume.
- * Results are logged under ObservatoryControl as greppable CONTROL lines.
+ * Results are logged under ObservatoryControl as greppable CONTROL lines. Continuous capture commands
+ * (continuous-start/stop/status) and settings (config-show/config-set/config-reset) use the same entry; continuous-start
+ * keeps this activity open until the camera service reports running or an error, so the camera foreground
+ * service is started and brought up while a visible activity exists.
  */
 public final class ControlActivity extends Activity {
     private static final String TAG = ControlCommand.LOG_TAG;
     private ControlCommand pending;
     private boolean resumed;
+    private ControlCommand awaiting;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable awaitTimeout = () -> finishAwaiting("failed", "reason=start-timeout (check continuous-status)");
+    private static final long AWAIT_MS = 15000;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -37,12 +47,13 @@ public final class ControlActivity extends Activity {
 
     private void handle(Intent intent) {
         String id = intent.getStringExtra(ControlCommand.EXTRA_REQUEST_ID);
-        ControlCommand command = ControlCommand.parse(intent.getStringExtra(ControlCommand.EXTRA_COMMAND), id);
+        ControlCommand command = ControlCommand.parse(intent.getStringExtra(ControlCommand.EXTRA_COMMAND), id, intent.getStringExtra(ControlCommand.EXTRA_CONFIG));
+        intent.removeExtra(ControlCommand.EXTRA_CONFIG);
         intent.removeExtra(ControlCommand.EXTRA_COMMAND);
         intent.removeExtra(ControlCommand.EXTRA_REQUEST_ID);
         if (command == null) {
             Log.e(TAG, ControlCommand.line(ControlCommand.isValidRequestId(id) ? id : "-", "invalid", "error", "reason=invalid-command-or-request-id"));
-            if (pending == null) finish();
+            if (pending == null && awaiting == null) finish();
             return;
         }
         if (pending != null) Log.w(TAG, ControlCommand.line(pending.requestId, pending.name, "superseded", null));
@@ -64,15 +75,112 @@ public final class ControlActivity extends Activity {
     private void run() {
         ControlCommand command = pending;
         if (command == null) return;
-        if (command.name.equals(ControlCommand.START) && !resumed) {
+        if (command.needsResumedActivity() && !resumed) {
             Log.i(TAG, ControlCommand.line(command.requestId, command.name, "deferred", "reason=activity-not-resumed"));
             return;
         }
         pending = null;
-        if (command.name.equals(ControlCommand.START)) start(command);
-        else if (command.name.equals(ControlCommand.STOP)) stop(command);
-        else status(command);
-        finish();
+        switch (command.name) {
+            case ControlCommand.START: start(command); break;
+            case ControlCommand.STOP: stop(command); break;
+            case ControlCommand.CONTINUOUS_START: continuousStart(command); break;
+            case ControlCommand.CONTINUOUS_STOP: continuousStop(command); break;
+            case ControlCommand.CONTINUOUS_STATUS: continuousStatus(command); break;
+            case ControlCommand.CONFIG_SHOW: configShow(command); break;
+            case ControlCommand.CONFIG_SET: configSet(command); break;
+            case ControlCommand.CONFIG_RESET: configReset(command); break;
+            default: status(command);
+        }
+        if (awaiting == null) finish();
+    }
+
+    @Override protected void onDestroy() {
+        handler.removeCallbacks(awaitTimeout);
+        if (awaiting != null) ContinuousCaptureService.setListener(null);
+        super.onDestroy();
+    }
+
+    private void continuousStart(ControlCommand command) {
+        ContinuousStatus current = ContinuousCaptureService.getStatus();
+        if (current.state.equals(ContinuousStatus.RUNNING)) {
+            Log.i(TAG, ControlCommand.line(command.requestId, command.name, "started", "already=true state=running"));
+            return;
+        }
+        if (!current.isActive()) {
+            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=camera-permission-missing"));
+                return;
+            }
+            String notifications = notificationState();
+            if (!notifications.equals("ok")) {
+                Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=notifications-" + notifications));
+                return;
+            }
+            String owner = CameraArbiter.shared().owner();
+            if (!owner.equals(CameraArbiter.NONE)) {
+                Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=camera-busy owner=" + owner));
+                return;
+            }
+        }
+        awaiting = command;
+        ContinuousCaptureService.setListener(() -> {
+            ContinuousStatus s = ContinuousCaptureService.getStatus();
+            if (s.state.equals(ContinuousStatus.RUNNING)) finishAwaiting("started", "state=running");
+            else if (!s.isActive()) finishAwaiting("failed", "reason=" + (s.lastError == null ? "stopped" : s.lastError));
+        });
+        handler.postDelayed(awaitTimeout, AWAIT_MS);
+        if (current.isActive()) return;
+        try {
+            startForegroundService(new Intent(this, ContinuousCaptureService.class)
+                .setAction(ContinuousCaptureService.ACTION_START)
+                .putExtra(ContinuousCaptureService.EXTRA_REQUEST_ID, command.requestId));
+            Log.i(TAG, ControlCommand.line(command.requestId, command.name, "accepted", "waiting-for-camera"));
+        } catch (RuntimeException e) {
+            finishAwaiting("failed", "reason=start-exception " + e);
+        }
+    }
+
+    private void finishAwaiting(String result, String detail) {
+        ControlCommand command = awaiting;
+        if (command == null) return;
+        awaiting = null;
+        handler.removeCallbacks(awaitTimeout);
+        ContinuousCaptureService.setListener(null);
+        if (result.equals("failed")) Log.e(TAG, ControlCommand.line(command.requestId, command.name, result, detail));
+        else Log.i(TAG, ControlCommand.line(command.requestId, command.name, result, detail));
+        if (pending == null) finish();
+    }
+
+    private void continuousStop(ControlCommand command) {
+        stopService(new Intent(this, ContinuousCaptureService.class));
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "stop-requested", "state=" + ContinuousCaptureService.getStatus().state));
+    }
+
+    private void continuousStatus(ControlCommand command) {
+        boolean camera = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "continuous-status",
+            ContinuousCaptureService.getStatus().describe(SystemClock.elapsedRealtimeNanos())
+            + " camera=" + (camera ? "granted" : "denied") + " notifications=" + notificationState()
+            + " owner=" + CameraArbiter.shared().owner()));
+    }
+
+    private void configShow(ControlCommand command) {
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", CaptureSettings.load(this).describe()));
+    }
+
+    private void configSet(ControlCommand command) {
+        CaptureConfig.Parsed parsed = CaptureConfig.parse(command.config, CaptureSettings.load(this));
+        if (parsed.config == null) {
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=invalid-config:" + parsed.error));
+            return;
+        }
+        CaptureSettings.save(this, parsed.config);
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", parsed.config.describe() + " applied=next-frame"));
+    }
+
+    private void configReset(ControlCommand command) {
+        CaptureSettings.save(this, CaptureConfig.defaults());
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", CaptureConfig.defaults().describe() + " applied=next-frame"));
     }
 
     private String notificationState() {

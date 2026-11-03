@@ -11,9 +11,10 @@ WAKE=1
 FORCE=0
 OUT=
 LINES=60
+CONFIG=
 TARGET="${TARGET:-}"
 
-EX_USAGE=2 EX_FAIL=3 EX_STOPPED=4 EX_TIMEOUT=5 EX_INCONSISTENT=6 EX_DEVICE=10 EX_PERM=11
+EX_USAGE=2 EX_FAIL=3 EX_STOPPED=4 EX_TIMEOUT=5 EX_INCONSISTENT=6 EX_BUSY=7 EX_DEVICE=10 EX_PERM=11
 
 usage() {
     cat <<USAGE
@@ -26,11 +27,18 @@ Subcommands:
   capture [--out F]  capture one JPEG now; optionally fetch it after fresh-capture evidence
   fetch --out FILE   copy the stored snapshot.jpg (the latest stored file, NOT proof of a fresh capture)
   logs               show recent diagnostics (control/camera/HTTP logs, permissions, service state)
+  continuous-start   start sustained JPEG capture (camera foreground service, needs CAMERA + POST_NOTIFICATIONS)
+  continuous-stop    stop sustained capture and release the camera
+  continuous-status  state, session frames, measured FPS, last capture time/age, processing diagnostics
+  config-show        show the persistent capture/overlay settings
+  config-set K=V ... validate and save settings atomically (overlay=on|off location=NAME position=bottom-left|bottom-right|top-left|top-right
+                     text_size=10-96 fields=location,datetime,fps,frames target_fps=0.1-2.0); applied from the next frame
+  config-reset       restore default settings
   setup-permissions  grant CAMERA and POST_NOTIFICATIONS via 'pm grant' (only when you run it)
 
 Options: --timeout SECONDS (default 20), --no-wake, --force (fetch overwrite), --out FILE, --lines N
 TARGET is the exact adb serial or host:port of a device you have verified (see 'adb devices').
-Exit codes: 0 ok, 2 usage, 3 failure, 4 stopped, 5 timeout, 6 inconsistent, 10 device/app, 11 permission.
+Exit codes: 0 ok, 2 usage, 3 failure, 4 stopped, 5 timeout, 6 inconsistent, 7 camera busy, 10 device/app, 11 permission.
 USAGE
 }
 
@@ -47,8 +55,12 @@ while [[ $# -gt 0 ]]; do
         --no-wake) WAKE=0; shift ;;
         --force) FORCE=1; shift ;;
         -h|--help|help) usage; exit 0 ;;
-        start|stop|status|capture|fetch|logs|setup-permissions)
+        start|stop|status|capture|fetch|logs|setup-permissions|continuous-start|continuous-stop|continuous-status|config-show|config-set|config-reset)
             [[ -z $SUB ]] || die $EX_USAGE "Only one subcommand allowed."; SUB=$1; shift ;;
+        *=*)
+            [[ $SUB == config-set ]] || die $EX_USAGE "Unexpected assignment '$1' (only valid after config-set)."
+            [[ $1 =~ ^[a-z_]+=[A-Za-z0-9_.,-]+$ ]] || die $EX_USAGE "Invalid assignment '$1': keys are lowercase, values use only A-Za-z0-9_.,-"
+            CONFIG="${CONFIG:+$CONFIG }$1"; shift ;;
         *) usage >&2; die $EX_USAGE "Unknown argument: $1" ;;
     esac
 done
@@ -59,6 +71,10 @@ done
 [[ $LINES =~ ^[0-9]+$ ]] || die $EX_USAGE "--lines must be a number."
 [[ $APP_PORT =~ ^[0-9]+$ ]] || die $EX_USAGE "APP_PORT must be a number."
 case $SUB in fetch) [[ -n $OUT ]] || die $EX_USAGE "fetch needs --out FILE." ;; esac
+if [[ $SUB == config-set ]]; then
+    [[ -n $CONFIG ]] || die $EX_USAGE "config-set needs at least one KEY=VALUE."
+    (( ${#CONFIG} <= 200 )) || die $EX_USAGE "config-set assignments are too long."
+fi
 
 state=$(adbt get-state 2>&1) || die $EX_DEVICE "Target '$TARGET' is not usable: $state"
 [[ $state == device ]] || die $EX_DEVICE "Target '$TARGET' state is '$state', expected 'device' (authorize it first)."
@@ -90,7 +106,12 @@ am_start() { # args passed to am start; fail on shell errors / permission denial
     fi
 }
 
-send_control() { wake; am_start -n "$PKG/.ControlActivity" --es command "$1" --es request_id "$2"; }
+# send_control CMD ID [ASSIGNMENTS]; assignments were whitelisted above and are single-quoted for the device shell.
+send_control() {
+    wake
+    if [[ -n ${3:-} ]]; then am_start -n "$PKG/.ControlActivity" --es command "$1" --es request_id "$2" --es config "'$3'"
+    else am_start -n "$PKG/.ControlActivity" --es command "$1" --es request_id "$2"; fi
+}
 
 FWD_PORT=
 cleanup() { [[ -n $FWD_PORT ]] && adbt forward --remove "tcp:$FWD_PORT" >/dev/null 2>&1; FWD_PORT=; }
@@ -232,6 +253,7 @@ cmd_capture() {
         fi
         sleep 1
     done
+    grep -q 'reason=camera-busy' <<<"$line" && die $EX_BUSY "Capture rejected: the camera is owned by another mode (${line#*reason=}). Stop continuous capture first."
     grep -q 'result=failed' <<<"$line" && die $EX_FAIL "Capture failed: ${line#*reason=}"
     after=$(snapshot_stat)
     [[ $after != none ]] || die $EX_FAIL "Capture logged success but snapshot.jpg is missing."
@@ -244,6 +266,88 @@ cmd_capture() {
     [[ -z $OUT ]] || fetch_snapshot "$OUT"
 }
 
+field() { sed -n "s/.* $1=\\([^ ]*\\).*/\\1/p" <<<"$2"; } # field NAME LINE
+
+# Waits for a fresh CONTROL line of command $2 (request id $1) matching regex $3; prints it.
+wait_control() {
+    local deadline=$((SECONDS + TIMEOUT)) line
+    while :; do
+        line=$(control_lines "$1" | grep "cmd=$2" | grep -E "$3" | tail -n 1)
+        [[ -n $line ]] && { echo "$line"; return 0; }
+        (( SECONDS >= deadline )) && return 1
+        sleep 1
+    done
+}
+
+# Prints the continuous-status line (fresh request id every call).
+continuous_line() {
+    local id; id=$(new_id)
+    send_control continuous-status "$id"
+    wait_control "$id" continuous-status 'result=continuous-status' || die $EX_TIMEOUT "Timeout waiting for continuous status from the app."
+}
+
+cmd_continuous_start() {
+    [[ $(perm_state android.permission.CAMERA) == denied ]] && die $EX_PERM "CAMERA is not granted (no dialog over SSH). Run: $0 -s $TARGET setup-permissions"
+    [[ $(perm_state android.permission.POST_NOTIFICATIONS) == denied ]] && die $EX_PERM "POST_NOTIFICATIONS is not granted. Run: $0 -s $TARGET setup-permissions"
+    local id line reason
+    id=$(new_id)
+    send_control continuous-start "$id"
+    if ! line=$(wait_control "$id" continuous-start 'result=(started|failed)'); then
+        if control_lines "$id" | grep -q 'result=deferred'; then
+            die $EX_TIMEOUT "Timeout: the control activity never resumed (screen off, locked or dozing?). The camera service is only started from a visible activity."
+        fi
+        die $EX_TIMEOUT "Timeout waiting for the camera to start; check 'continuous-status' and 'logs'."
+    fi
+    if grep -q 'result=failed' <<<"$line"; then
+        reason=${line#*reason=}
+        case $reason in
+            camera-busy*) die $EX_BUSY "Rejected: the camera is already in use ($reason). Only one camera owner is allowed." ;;
+            camera-permission-missing*|notifications-*) die $EX_PERM "Start failed: $reason" ;;
+            *) die $EX_FAIL "Continuous start failed: $reason" ;;
+        esac
+    fi
+    echo "STARTED: ${line#*result=started }"
+    echo "Check measured rate and fresh frames with: $0 -s $TARGET continuous-status"
+}
+
+cmd_continuous_status() {
+    local line state age
+    line=$(continuous_line)
+    echo "Continuous: ${line#*result=continuous-status }"
+    state=$(field state "$line"); age=$(field age_ms "$line")
+    case $state in
+        running)
+            if [[ $age == none || ( $age =~ ^[0-9]+$ && $age -gt 10000 ) ]]; then echo "WARNING: running but no recent frame (age_ms=$age); the last stored snapshot may be stale." >&2; fi
+            echo "RUNNING (fps is measured, not the target)"; exit 0 ;;
+        starting) echo "STARTING"; exit 0 ;;
+        error) die $EX_FAIL "ERROR: ${line#*lastError=}" ;;
+        *) echo "STOPPED"; exit $EX_STOPPED ;;
+    esac
+}
+
+cmd_continuous_stop() {
+    local id deadline line
+    id=$(new_id); deadline=$((SECONDS + TIMEOUT))
+    send_control continuous-stop "$id"
+    wait_control "$id" continuous-stop 'result=stop-requested' >/dev/null || die $EX_TIMEOUT "Timeout waiting for stop acknowledgement."
+    while :; do
+        line=$(continuous_line)
+        [[ $(field state "$line") == stopped || $(field state "$line") == error ]] && break
+        (( SECONDS >= deadline )) && die $EX_TIMEOUT "Timeout: continuous capture still active after stop."
+        sleep 1
+    done
+    echo "STOPPED: camera released; the app process and any HTTP server were left running."
+}
+
+cmd_config() { # config-show | config-set | config-reset
+    local id line
+    id=$(new_id)
+    send_control "$SUB" "$id" "$CONFIG"
+    line=$(wait_control "$id" "$SUB" 'result=(config|failed)') || die $EX_TIMEOUT "Timeout waiting for the settings result."
+    grep -q 'result=failed' <<<"$line" && die $EX_USAGE "Rejected, nothing changed: ${line#*reason=}"
+    echo "Config: ${line#*result=config }"
+}
+
 cmd_logs() {
     echo "== permissions =="
     echo "CAMERA: $(perm_state android.permission.CAMERA)"
@@ -253,7 +357,7 @@ cmd_logs() {
     echo "== snapshot file (inode-mtime-size) =="
     snapshot_stat
     echo "== recent logs =="
-    adbt logcat -d -v time -s ObservatoryControl:I ObservatoryCamera:I SnapshotHttp:I '*:S' 2>/dev/null | tail -n "$LINES"
+    adbt logcat -d -v time -s ObservatoryControl:I ObservatoryCamera:I ObservatoryContinuous:I SnapshotHttp:I '*:S' 2>/dev/null | tail -n "$LINES"
 }
 
 cmd_setup_permissions() {
@@ -278,4 +382,8 @@ case $SUB in
     fetch) fetch_snapshot "$OUT" ;;
     logs) cmd_logs ;;
     setup-permissions) cmd_setup_permissions ;;
+    continuous-start) cmd_continuous_start ;;
+    continuous-stop) cmd_continuous_stop ;;
+    continuous-status) cmd_continuous_status ;;
+    config-show|config-set|config-reset) cmd_config ;;
 esac

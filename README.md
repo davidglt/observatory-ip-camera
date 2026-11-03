@@ -2,7 +2,11 @@
 
 Native Java Android camera app developed, compiled and signed in Termux. Source, comments, messages and documentation are in English.
 
-## Status: 0.4.0
+## Status: 0.5.0 (continuous capture, not yet compiled to an APK or device-validated)
+
+New in 0.5.0: sustained Camera2 JPEG capture with a burned-in overlay, controlled only over authorized ADB (see "Continuous capture and overlay" below). Everything below about 0.4.0 still applies.
+
+### 0.4.0 baseline
 
 Camera2 single JPEG capture plus a native HTTP snapshot server owned by an explicit foreground service (SnapshotHttpService), bound explicitly to 0.0.0.0:8080 (all IPv4 interfaces). No Python server or manual export is required for native HTTP. GET and HEAD /snapshot.jpg read the latest private app snapshot. Requests do not trigger capture. No directory listing, continuous video or MJPEG stream is implemented.
 
@@ -68,6 +72,67 @@ Set TARGET to a verified device and run each step; record fresh output.
 11. Doze/lock screen: record behavior; no guarantee.
 
 Validation status: the shell script is tested against a fake adb (test/camera-control-test.sh) and ControlCommand by a pure Java test (`bash test/run.sh`). ControlActivity, the service/MainActivity changes and the manifest were not compiled against android.jar or run on a device in the authoring environment; run `bash build.sh` in Termux and the checklist above.
+
+## Continuous capture and overlay
+
+Sustained JPEG capture runs in ContinuousCaptureService, started and stopped only over SSH through the same shell-protected ControlActivity entry and scripts/camera-control.sh (explicit TARGET required, same whitelisting, no display or touch needed). Single capture and the independent HTTP server keep working as before.
+
+```sh
+bash scripts/camera-control.sh -s "$TARGET" setup-permissions       # CAMERA + POST_NOTIFICATIONS, only when you choose
+bash scripts/camera-control.sh -s "$TARGET" config-show
+bash scripts/camera-control.sh -s "$TARGET" config-set overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps,frames target_fps=1
+bash scripts/camera-control.sh -s "$TARGET" continuous-start
+bash scripts/camera-control.sh -s "$TARGET" continuous-status
+bash scripts/camera-control.sh -s "$TARGET" continuous-stop
+```
+Exit codes add 7 = camera busy (another owner holds the camera).
+
+Camera ownership: exactly one owner at a time (CameraArbiter): the single-capture activity or the continuous service. A conflicting request is rejected (log reason `camera-busy owner=...`, script exit 7), never coordinated by opening a second camera. Stop continuous capture before running `capture`. HTTP is independent: it only reads the published file, and starting/stopping it never touches the camera.
+
+Android rules respected: the service is declared `android:foregroundServiceType="camera"` and entered with `startForeground(..., FOREGROUND_SERVICE_TYPE_CAMERA)`. At targetSdk 33 the manifest needs FOREGROUND_SERVICE (already declared) and the runtime CAMERA permission; `FOREGROUND_SERVICE_CAMERA` only exists from API 34 and is deliberately not declared (add it, and re-check, if the target SDK is raised). Android 11+ only grants while-in-use camera access to a foreground service started while the app is visible, so `continuous-start` launches ControlActivity, requires it to be resumed and keeps it open until the service reports running or an error; if the screen is off/locked the start is deferred and times out. Missing CAMERA/POST_NOTIFICATIONS are reported as errors (exit 11) without dialogs. Nothing bypasses camera, background or lock-screen restrictions; Samsung/Android may still disconnect the camera (screen off, privacy toggle, another app), which ends the session in state `error`. START_NOT_STICKY, no boot receiver, no automatic restart, no wake lock, no battery-optimization bypass.
+
+Pipeline: one camera device, one capture session and one ImageReader (maxImages 2) per run. One capture is in flight at a time; the next is issued only after the previous frame was processed and published (or failed), after waiting for the target interval measured on a monotonic clock. Memory is bounded (one JPEG buffer and at most three bitmaps of one frame). Camera callbacks run on one thread, decode/overlay/file I/O on another; the UI thread does none of it (single capture was moved off the main thread too). A 10 s watchdog and 5 consecutive failures end the session with state `error`. Stop and all error paths cancel pending work and close the reader, session, device, both threads and the orientation listener; start/stop can be repeated.
+
+Rate: default target 1 FPS, optional 2 FPS (`target_fps` 0.1-2.0). The target is a ceiling, not a promise. `continuous-status` reports the measured FPS (sliding window of the last 10 frames, monotonic time; `n/a` until two frames exist), `late` (cycles longer than the target interval) and processing time (last/avg/max ms, bytes, overlay mode). Fields: `state` (stopped|starting|running|error), `frames` (session frame count, successfully published frames), `last_capture` (wall-clock time of the frame in ISO form) with `tz` (device timezone) and `age_ms` (monotonic age computed at query time). The stored snapshot is only "fresh" if `frames` increases and `age_ms` is small; a stopped or errored session reports its state and never a fresh time. The frame time is taken when the image is received from the camera, so it can trail the exposure by the camera latency; it is never the HTTP retrieval time.
+
+Overlay (default on, burned into the JPEG pixels so snapshot clients and any later MJPEG consumer see it): bottom-left, green bold text with black outline and shadow, margins of 3% of the short side (min 8 px). Default text:
+
+```
+NYX
+2026-11-03 18:00:00 CET
+FPS: 0.98 | Frames: 12
+```
+NYX is a configurable text label, not GPS; no location permission is used. FPS shows `--` until it can be measured. Single capture uses the same overlay with `FPS: --` and `Frames: 1`.
+
+Settings (persistent, SharedPreferences, validated as one atomic command; an invalid value changes nothing): `overlay=on|off`, `location=` 1-24 chars of A-Za-z0-9_.- (no spaces: values pass through the device shell and are whitelisted), `position=bottom-left|bottom-right|top-left|top-right`, `text_size=10-96` (for a 720 px short side, scaled to the image; long lines shrink to fit), `fields=` comma list of location,datetime,fps,frames, `target_fps=0.1-2.0`. Apply semantics: saved immediately and used by the next frame of a running session and by the next single capture; no restart needed. The camera resolution (nearest to 1280x720) is not configurable.
+
+Orientation and EXIF: JPEG_ORIENTATION is requested per capture from the physical device angle as before. With the overlay on, the EXIF orientation tag of the camera JPEG is read and applied once (rotate/mirror), the text is drawn on the upright pixels and the re-encoded JPEG has no EXIF orientation, so viewers cannot rotate it a second time. If a HAL rotates pixels and leaves the tag at normal, nothing more is applied. If the HAL ignores JPEG_ORIENTATION and writes no tag, the image cannot be corrected by the app. If the orientation sensor delivers nothing in the background the fallback angle 0 is used.
+
+Behavior change: previous versions saved the camera JPEG bytes unchanged. With the overlay on, every frame is decoded, drawn on and re-encoded (quality 90), which costs CPU/time and one lossy generation; with `overlay=off` the camera bytes are saved unchanged (no decode, no re-encode, camera EXIF kept) and `overlay_mode=passthrough` is reported. Processing cost is measured and reported (`proc_*_ms`), not promised; sustained 2 FPS may not be reached on this device.
+
+Publication: each frame is written to a temporary file, synced and renamed over `files/snapshot.jpg` (private, atomic; the temp name is never published), only if the session is still current, so HTTP clients always get a complete file and a stopped session never publishes a late frame. Overlay text is rendered once per capture; an old file is never re-stamped. `GET /snapshot.jpg` is unchanged and compatible. Still not included: MJPEG endpoint, continuous web viewer, authentication, web settings endpoint. The HTTP server remains unauthenticated and without TLS: trusted LAN only.
+
+Future Settings button: a later authenticated web viewer may show a Settings button as a viewer-layer control (HTML/UI next to the image, backed by authenticated web configuration). It will not be burned into recorded pixels and no fake clickable JPEG button exists now.
+
+### Continuous capture SSH-only checklist
+
+Set TARGET; run every step with the phone screen possibly off/unconnected to any display. Record fresh output each time.
+1. `setup-permissions`, `config-reset`, `config-show` (defaults: overlay=on location=NYX position=bottom-left text_size=24 target_fps=1.0).
+2. Fresh frames: `continuous-start` (exit 0), then `continuous-status` three times 5 s apart: `frames` must increase, `age_ms` stay below about 2x the interval, `last_capture` advance, fps near the target. `fetch --out a.jpg`, wait a few seconds, `fetch --out b.jpg`: the files must differ and show different times in the overlay.
+3. Measured rates: run with `target_fps=1`, then `config-set target_fps=2` (applies without restart); compare `fps`, `late`, `proc_avg_ms`; record whether 2 FPS is reached.
+4. Stop/restart: `continuous-stop` (exit 0, state stopped, camera released: `dumpsys media.camera` shows no client), `continuous-stop` again (idempotent), `continuous-start`; repeat 10 times; `frames` restarts from 0 each session.
+5. HTTP coexistence: `start` the HTTP server, then `continuous-start`; `curl` the forwarded port repeatedly: always complete JPEGs with changing time stamps; stop each independently; stopping HTTP leaves capture running and vice versa.
+6. Single-capture conflict: while continuous runs, `capture` must exit 7 (camera-busy) and continuous must keep running; after `continuous-stop`, `capture` works and a following `continuous-start` works. `continuous-start` during a running single capture must be rejected (exit 7) or succeed after it.
+7. Repeated commands: `continuous-start` twice (second reports already=true, one notification), `config-set` twice, `continuous-status` while starting.
+8. Activity/background: press Home (`input keyevent KEYCODE_HOME`) while running: capture should continue (foreground service) - record result; also `am force-stop` stops it and nothing restarts.
+9. Screen-off/lock: `input keyevent KEYCODE_SLEEP` during a run: record whether `frames` keeps increasing or the state becomes `error`; `continuous-start` with the screen off must time out (deferred) rather than start. No bypass is attempted.
+10. Orientation/overlay: for portrait, landscape left, landscape right and reverse portrait (and with auto-rotation locked), set the phone and run `fetch`; scene and text must both be upright with the text in the bottom-left of the upright image; check `position=` variants and `overlay=off` (scene upright via EXIF in a viewer honoring EXIF, no text, `overlay_mode=passthrough`).
+11. Persistence: `config-set overlay=off location=TEST target_fps=2 text_size=40`, `am force-stop`, `config-show` must still show the values; `config-reset`.
+12. Denied permissions: `pm revoke ... CAMERA` then `continuous-start` -> exit 11 with no dialog; also POST_NOTIFICATIONS. Re-grant and retry.
+13. Errors: `config-set text_size=5`, `target_fps=3`, `fields=gps`, `position=middle`, `location='a b'`, `overlay=on;id` must all be rejected (exit 2) and `config-show` unchanged. Open another camera app during a run: record state/error and that `continuous-stop` still cleans up.
+14. Sustained run: 1-2 hours; sample `continuous-status` and `dumpsys meminfo local.termux.observatorycamera`, `dumpsys battery` temperature and `dumpsys thermalservice` every 10 minutes: frames increase, no growing memory, processing time stable, storage not growing (one snapshot file). Record thermal throttling.
+
+Validation status of this section: pure tests (config validation, overlay text/layout, EXIF decomposition, FPS/age math, camera arbitration, atomic publisher) and shell tests against a fake adb pass in `bash test/run.sh`. The Android sources were type-checked with javac against a Robolectric API 33 android-all jar, but build.sh (aapt2/d8/apksigner), the APK, Camera2 behavior, foreground-camera rules, EXIF handling by the Samsung HAL and every checklist step were NOT run or device-validated in the authoring environment.
 
 ## Build in Termux
 
@@ -146,13 +211,13 @@ adb -s "$TARGET" shell am force-stop local.termux.observatorycamera
 
 scripts/serve-snapshot.py and docs/snapshot-http.md remain for optional isolated testing, not as the normal native serving path. They must use another port if run alongside the APK.
 
-Next: verify native build and LAN access, add authentication, then continuous capture, a properly permissioned camera foreground service and MJPEG for Motion on Manjaro. Exposure and focus convergence still need validation; no preview or autofocus convergence routine is implemented. Current JPEG saving is on the main handler.
+Next: verify native build and LAN access, add authentication, then MJPEG for Motion on Manjaro and an authenticated web settings page. Exposure and focus convergence still need validation; no preview or autofocus convergence routine is implemented. Current JPEG saving is on the main handler.
 
 ## JPEG orientation
 
 The app sets Camera2 JPEG_ORIENTATION from the physical device angle (OrientationEventListener, rounded to 90 degrees) and the rear camera SENSOR_ORIENTATION: (sensor + device + 360) % 360, with the device angle negated for a front-facing sensor. Display rotation is not used. The last valid angle is kept across pause and activity recreation. With no valid reading yet (cold start) the app logs a fallback (device angle 0, sensor-only behavior); that is not measured orientation. The angle is snapshotted when the capture request is built, and logcat shows sensor, device, JPEG angle and fallback use.
 
-Camera2 JPEG bytes are saved unchanged (no bitmap rotation or re-encoding). The camera HAL may either rotate the pixels or set the EXIF orientation tag; use a viewer that honors EXIF. Snapshots taken before this change must be recaptured. Orientation is ambiguous when the device lies flat (the sensor reports unknown), so the last valid angle is used.
+With the overlay disabled, Camera2 JPEG bytes are saved unchanged (no bitmap rotation or re-encoding); the camera HAL may either rotate the pixels or set the EXIF orientation tag, so use a viewer that honors EXIF. With the overlay enabled the JPEG is decoded, the EXIF orientation is applied exactly once and the result is re-encoded without an EXIF block (implicitly upright; see below). Snapshots taken before this change must be recaptured. Orientation is ambiguous when the device lies flat (the sensor reports unknown), so the last valid angle is used.
 
 Pure tests (no Gradle, no Android): `bash test/run.sh` covers orientation math and SnapshotHttpServer start/stop/restart/occupied-port/active-socket shutdown. SnapshotHttpService, the MainActivity controls and the manifest changes were not compiled against the Android API or run on a device in the authoring environment (no android.jar/aapt2/d8); run `bash build.sh` in Termux and the validation above.
 
