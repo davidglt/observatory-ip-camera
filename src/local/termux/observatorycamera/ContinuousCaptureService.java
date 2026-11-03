@@ -29,6 +29,7 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
 import android.view.OrientationEventListener;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.TimeZone;
