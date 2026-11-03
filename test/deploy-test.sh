@@ -21,6 +21,13 @@ cat > "$R/test/run.sh" <<'B'
 echo "fake tests"; [[ -n ${FAKE_TEST_FAIL:-} ]] && exit 1; exit 0
 B
 printf '#!/usr/bin/env bash\nexec bash "%s/test/fake-adb.sh" "$@"\n' "$ROOT" > "$T/bin/adb"
+cat > "$T/bin/wireless-debugging" <<'W'
+#!/usr/bin/env bash
+echo "$*" >> "$FAKE_WIRELESS_LOG"
+[[ ${FAKE_WIRELESS_MODE:-success} == success ]] || exit 7
+printf '%s\n' "$FAKE_WIRELESS_DEVICE" > "$FAKE_DEVICES"
+echo "fake wrapper output"
+W
 cat > "$T/bin/aapt2" <<'B'
 #!/usr/bin/env bash
 [[ -n ${FAKE_AAPT_FAIL:-} ]] && { echo "aapt2 error" >&2; exit 3; }
@@ -36,13 +43,14 @@ chmod +x "$T/bin"/*
 printf "dist/\nbuild/\n" > "$R/.gitignore"
 git -C "$R" init -q -b main && git -C "$R" add -A && git -C "$R" -c user.name=t -c user.email=t@t commit -qm init
 export PATH="$T/bin:$PATH" HOME="$T/home" ADB="$T/bin/adb" DEPLOY_STATE_DIR="$T/state"
-export FAKE_LOG="$T/calls" FAKE_DEVICES="$T/devices" FAKE_MDNS="$T/mdns"
+export FAKE_LOG="$T/calls" FAKE_DEVICES="$T/devices" FAKE_MDNS="$T/mdns" FAKE_WIRELESS_LOG="$T/wireless-calls"
 unset TARGET
 SIGN="$HOME/.local/share/observatory-ip-camera/signing"
 D="$R/scripts/deploy.sh"
 fails=0
 reset() {
     printf 'A1 device\n' > "$FAKE_DEVICES"; : > "$FAKE_LOG"; rm -f "$FAKE_LOG.bad" "$R/dist/"* "$R/dist/".deploy-stamp
+    : > "$FAKE_WIRELESS_LOG"; unset FAKE_WIRELESS_MODE FAKE_WIRELESS_DEVICE
     echo k > "$SIGN/identity.p12"; echo p > "$SIGN/password"
     unset FAKE_AAPT_LINE FAKE_AAPT_FAIL FAKE_BUILD_FAIL FAKE_TEST_FAIL FAKE_INSTALL FAKE_INSTALLED FAKE_APK_CONTENT; export FAKE_VERSION="0.5.0 5"
 }
@@ -61,6 +69,7 @@ expect_not_installed() { if installed; then echo "FAIL: $1 installed"; fails=$((
 reset
 check "successful deploy" 0 'result: SUCCESS' 
 expect_installed "success"
+[[ ! -s $FAKE_WIRELESS_LOG ]] && echo "ok: deploy default does not enable wireless debugging" || { echo "FAIL: deploy default enabled wireless debugging"; fails=$((fails+1)); }
 grep -q -- '-s A1 install -r .*observatory-ip-camera.apk' "$FAKE_LOG" && echo "ok: install uses -s and -r" || { echo "FAIL: install args"; fails=$((fails+1)); }
 grep -qE 'uninstall|pm clear|pm grant| -d ' "$FAKE_LOG" && { echo "FAIL: forbidden adb calls"; fails=$((fails+1)); }
 out=$(cd / && bash "$D" 2>&1); echo "$out" | grep -E 'commit:|target: A1 \(model: FakePhone\)|apk version: 0.5.0 \(5\)|log: ' >/dev/null && echo "ok: summary" || { echo "FAIL: summary"; echo "$out"; fails=$((fails+1)); }
@@ -113,6 +122,7 @@ reset; rm -f "$SIGN/password"; check "incomplete identity" 22 'incomplete'
 reset; rm -f "$SIGN/identity.p12" "$SIGN/password"; check "first install without identity allowed" 0 'will create one'
 # modes
 reset; check "test-only" 0 'result: SUCCESS' --test-only; expect_not_installed "test-only"
+[[ ! -s $FAKE_WIRELESS_LOG ]] && echo "ok: test-only ignores wireless recovery" || { echo "FAIL: test-only enabled wireless debugging"; fails=$((fails+1)); }
 reset; check "build-only" 0 'apk version: 0.5.0' --build-only; expect_not_installed "build-only"
 [[ -s $R/dist/observatory-ip-camera.apk ]] && echo "ok: build-only artifact" || { echo "FAIL: artifact"; fails=$((fails+1)); }
 check "install-only fresh artifact" 0 'result: SUCCESS' --install-only; expect_installed "install-only"
@@ -137,5 +147,7 @@ git -C "$R" push -q origin main 2>/dev/null
 check "git-update ff-only success" 0 'git merge --ff-only' --git-update
 check "dirty status reported" 0 'dirty: no' --test-only
 echo x > "$R/untracked"; check "dirty status reported" 0 'dirty: yes' --test-only; rm "$R/untracked"
+reset; : > "$FAKE_DEVICES"; FAKE_WIRELESS_DEVICE="A1 device" check "deploy forwards explicit wireless recovery" 0 'result: SUCCESS' --refresh-target --wireless-on
+grep -qx 'on' "$FAKE_WIRELESS_LOG" && echo "ok: deploy forwarded wireless recovery once" || { echo "FAIL: deploy did not forward wireless recovery"; fails=$((fails+1)); }
 check "unknown option" 2 'unknown option' --bogus
 exit $(( fails > 0 ))

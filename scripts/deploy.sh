@@ -48,6 +48,8 @@ Options:
   -s, --target SERIAL  explicit adb target (else TARGET, else the single authorized device)
   --refresh-target     ignore a stale TARGET and re-resolve (see scripts/adb-target.sh)
   --mdns               opt-in reconnect of an already paired wireless device via adb mdns services
+  --wireless-on        opt-in bounded `wireless-debugging on` recovery if no usable device is found
+                       when combined with --mdns, mdns is tried first; ambiguous mdns is rejected
   --git-update         first run `git fetch` + `git merge --ff-only` of origin/main; requires a clean
                        tree on branch main whose origin matches the expected repository
   -h, --help           this help
@@ -279,6 +281,7 @@ main() {
             --git-update) GIT_UPDATE=1 ;;
             --refresh-target) TARGET_ARGS+=(--refresh) ;;
             --mdns) TARGET_ARGS+=(--mdns) ;;
+            --wireless-on) TARGET_ARGS+=(--wireless-on) ;;
             -s|--target) [[ $# -ge 2 && -n $2 ]] || { echo "deploy: $1 needs a value" >&2; exit $EX_USAGE; }
                 TARGET_ARGS+=(-s "$2"); shift ;;
             -h|--help) usage; exit 0 ;;
