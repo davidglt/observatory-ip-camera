@@ -10,3 +10,5 @@ java -cp "$OUT" local.termux.observatorycamera.SnapshotHttpServerTest
 java -cp "$OUT" local.termux.observatorycamera.ControlCommandTest
 for t in CaptureConfigTest ConfigStoreTest OverlayTest ContinuousStatsTest; do java -cp "$OUT" local.termux.observatorycamera.$t; done
 bash test/camera-control-test.sh
+bash test/adb-target-test.sh
+bash test/deploy-test.sh

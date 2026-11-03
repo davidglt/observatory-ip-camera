@@ -12,19 +12,33 @@ echo "$*" >> "$FAKE_LOG"
 [[ $1 == -s ]] || { echo "adb called without -s: $*" >> "$FAKE_LOG.bad"; exit 1; }
 shift 2
 S=$(cat "$FAKE_STATE" 2>/dev/null || echo ok)
+reject() { echo "fake adb: unsupported call: $*" >> "$FAKE_LOG.bad"; echo "fake adb: unsupported call: $*" >&2; exit 97; }
 case "$1" in
     get-state) [[ $S == offline ]] && echo offline || echo device ;;
     forward) [[ $2 == --remove ]] || echo "$FAKE_PORT" ;;
-    exec-out) cat "$FAKE_EXPORT" 2>/dev/null ;;
-    logcat) cat "$FAKE_LOGCAT" 2>/dev/null ;;
+    exec-out) cat "$FAKE_EXPORT" 2>/dev/null </dev/null ;;
+    logcat) cat "$FAKE_LOGCAT" 2>/dev/null </dev/null ;;
     shell)
+        # The only call allowed to consume stdin: the exact config-import upload command.
+        if [[ $2 == "run-as local.termux.observatorycamera sh -c 'cat > files/camera.import'" && $# -eq 2 ]]; then
+            cat > "$FAKE_UPLOAD"; exit 0
+        fi
         case "$2 $3" in
             "pm path") [[ $S == noapp ]] || echo "package:/data/app/x.apk" ;;
+            "pm grant") ;;
+            "input keyevent") ;;
             "dumpsys package") echo "      android.permission.POST_NOTIFICATIONS: granted=${FAKE_NOTIF:-true}"; echo "      android.permission.CAMERA: granted=${FAKE_CAM:-true}" ;;
-            "run-as"*) cat > "$FAKE_UPLOAD" ;;
+            "dumpsys activity") echo "ServiceRecord{x}" ;;
+            "run-as local.termux.observatorycamera")
+                # Metadata read: never touches stdin. FAKE_STAT gives "inode-mtime-size"; default is a missing file.
+                if [[ $4 == stat && $5 == -c && $7 == files/snapshot.jpg ]]; then
+                    if [[ -n ${FAKE_STAT:-} ]]; then echo "$FAKE_STAT"; else echo "stat: files/snapshot.jpg: No such file or directory" >&2; exit 1; fi
+                else reject "$@"; fi ;;
             "getprop ro.build.version.sdk") echo 33 ;;
-            "am start") shift 3; ID=$(sed -n 's/.*--es request_id \([^ ]*\).*/\1/p' <<<"$*"); [[ -n ${FAKE_LOGLINE:-} ]] && echo "01-01 I/ObservatoryControl( 1): CONTROL id=$ID $FAKE_LOGLINE" >> "$FAKE_LOGCAT"; echo "Status: ok" ;;
+            "am start") shift 3; ID=$(sed -n 's/.*--es request_id \([^ ]*\).*/\1/p' <<<"$*"); [[ -n ${FAKE_LOGLINE:-} ]] && echo "01-01 I/ObservatoryControl( 1): CONTROL id=$ID $FAKE_LOGLINE" >> "$FAKE_LOGCAT"; echo "Status: ok" </dev/null ;;
+            *) reject "$@" ;;
         esac ;;
+    *) reject "$@" ;;
 esac
 exit 0
 FAKE
@@ -33,11 +47,21 @@ export ADB="$T/adb" FAKE_LOGCAT="$T/logcat" FAKE_EXPORT="$T/export" FAKE_UPLOAD=
 unset TARGET
 C=scripts/camera-control.sh
 fails=0
+CASE_TIMEOUT="${CASE_TIMEOUT:-30}"
+# Held-open stdin: a FIFO opened read-write by this shell that never receives data. Any code that reads
+# stdin without being given a file blocks on it and trips the per-case deadline instead of hanging the run.
+mkfifo "$T/stdin.fifo"
+exec 9<>"$T/stdin.fifo"
+run_case() { # runs a command with the held-open stdin under a deadline; rc 124 = deadline exceeded
+    timeout -k 2 "$CASE_TIMEOUT" "$@" <&9
+}
 expect() { # name expected_exit pattern -- args
     local name=$1 code=$2 pat=$3; shift 3
     local out rc
-    out=$(bash "$C" "$@" 2>&1); rc=$?
-    if [[ $rc -ne $code ]] || ! grep -qE -- "$pat" <<<"$out"; then
+    out=$(run_case bash "$C" "$@" 2>&1); rc=$?
+    if [[ $rc -eq 124 ]]; then
+        echo "FAIL $name: no result within ${CASE_TIMEOUT}s (stdin left open; something blocks reading it), output: $out"; fails=$((fails+1))
+    elif [[ $rc -ne $code ]] || ! grep -qE -- "$pat" <<<"$out"; then
         echo "FAIL $name: rc=$rc (want $code), output: $out"; fails=$((fails+1))
     else echo "ok $name"; fi
 }
@@ -100,6 +124,18 @@ FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=stopped frame
 FAKE_LOGLINE="cmd=continuous-status result=continuous-status state=error frames=0 fps=n/a target_fps=1.0 last_capture=none age_ms=none lastError=Camera disconnected." expect cstatus-error 3 "Camera disconnected" -s T --no-wake --timeout 5 continuous-status
 FAKE_LOGLINE="cmd=continuous-stop result=stop-requested state=running" expect cstop-timeout 5 "still active|Timeout" -s T --no-wake --timeout 2 continuous-stop
 FAKE_LOGLINE="cmd=capture result=failed reason=camera-busy owner=continuous" expect capture-busy 7 "owned by another mode" -s T --no-wake --timeout 5 capture
+# Regression: snapshot stat queries (and capture paths that use them) must never consume stdin.
+FAKE_STAT=11-22-33 FAKE_LOGLINE="cmd=capture result=failed reason=camera-busy owner=continuous" expect capture-busy-snapshot-present 7 "owned by another mode" -s T --no-wake --timeout 5 capture
+statout=$(FAKE_STAT=11-22-33 run_case "$ADB" -s T shell run-as local.termux.observatorycamera stat -c '%i-%Y-%s' files/snapshot.jpg 2>&1); statrc=$?
+[[ $statrc -eq 0 && $statout == 11-22-33 ]] && echo "ok fake stat returns metadata with stdin open" || { echo "FAIL fake stat (rc=$statrc): $statout"; fails=$((fails+1)); }
+statout=$(run_case "$ADB" -s T shell run-as local.termux.observatorycamera stat -c '%i-%Y-%s' files/snapshot.jpg 2>&1); statrc=$?
+[[ $statrc -eq 1 && $statout == *"No such file"* ]] && echo "ok fake stat reports missing file with stdin open" || { echo "FAIL fake stat missing (rc=$statrc): $statout"; fails=$((fails+1)); }
+run_case "$ADB" -s T shell run-as local.termux.observatorycamera cat files/x >/dev/null 2>&1; [[ $? -eq 97 ]] && echo "ok unsupported run-as call rejected" || { echo "FAIL unsupported run-as accepted"; fails=$((fails+1)); }
+rm -f "$FAKE_LOG.bad"
+run_case "$ADB" -s T shell frobnicate >/dev/null 2>&1; [[ $? -eq 97 && -e $FAKE_LOG.bad ]] && echo "ok unsupported shell call rejected and recorded" || { echo "FAIL unsupported shell call"; fails=$((fails+1)); }
+rm -f "$FAKE_LOG.bad"
+# The deadline itself must work and clean up its children.
+CASE_TIMEOUT=2 run_case sleep 30; [[ $? -eq 124 ]] && echo "ok per-case deadline fires" || { echo "FAIL deadline"; fails=$((fails+1)); }
 FAKE_LOGLINE="cmd=config-show result=config overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps,frames target_fps=1.0" expect config-show 0 "location=NYX" -s T --no-wake --timeout 5 config-show
 FAKE_LOGLINE="cmd=config-set result=config overlay=off applied=next-frame" expect config-set 0 "overlay=off" -s T --no-wake --timeout 5 config-set overlay=off
 grep -q -- "--es config 'overlay=off'" "$FAKE_LOG" && echo "ok config passed single-quoted" || { echo "FAIL config quoting"; fails=$((fails+1)); }
