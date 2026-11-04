@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 David González López-Tercero
+# SPDX-License-Identifier: GPL-3.0-or-later
+# See LICENSE in the repository root for licensing details.
+
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if ! grep -Eq '<manifest[^>]*android:versionCode="8"[^>]*android:versionName="0\.8\.0"' AndroidManifest.xml; then
     echo "Release metadata must be versionCode 8 and versionName 0.8.0" >&2
     exit 1
 fi
+bash test/license-headers-test.sh
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 P=local/termux/observatorycamera

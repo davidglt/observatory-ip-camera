@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 David González López-Tercero
+# SPDX-License-Identifier: GPL-3.0-or-later
+# See LICENSE in the repository root for licensing details.
+
 # Fake adb for tests (no device). State files are chosen through environment variables:
 #   FAKE_LOG calls log, FAKE_DEVICES lines "serial state", FAKE_MDNS `adb mdns services` output,
 #   FAKE_INSTALL (success|fail), FAKE_INSTALLED (1 if the package is installed), FAKE_VERSION ("name code").

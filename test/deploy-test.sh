@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 David González López-Tercero
+# SPDX-License-Identifier: GPL-3.0-or-later
+# See LICENSE in the repository root for licensing details.
+
 # Tests scripts/deploy.sh with fake adb, fake build/test scripts and fake Android tools in a temporary
 # checkout (path with spaces). No device or Android SDK needed. Run: bash test/deploy-test.sh
 set -uo pipefail

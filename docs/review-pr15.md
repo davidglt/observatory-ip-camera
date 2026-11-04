@@ -15,9 +15,11 @@ The app has a deliberately small, framework-free Java test surface alongside And
 | Medium (development build) | `AndroidManifest.xml` marks the APK debuggable. This exposes development-only capabilities and must not be mistaken for a release-hardening setting. | Preserved as existing project behavior; keep APK distribution limited to the intended development/test workflow until a release-build policy is approved. |
 | Medium (credential storage) | Optional MQTT credentials are excluded from browser settings and exports and kept in app-private storage, but the file is not encrypted at rest. | No credentials are added to browser-visible settings or exported config. Stronger at-rest protection is a separate threat-model/design proposal. |
 | Low (test maintainability) | The viewer tests inspect serialized HTML/CSS/JavaScript strings and can be sensitive to harmless source refactors; they do not execute the browser layout algorithm. | Kept as focused regression protection without claiming browser validation. No existing assertions or test suites were removed. |
-| Blocked (licensing) | The repository has no `LICENSE`, and accessible owner repositories do not establish one consistent license. GPL-3.0-or-later appears in `bme280-observatory`, `wireless-debugging`, `retro_selector`, and `sharpcap-sequence-analyzer`; `bmx280_win` uses Apache-2.0. The GPL examples use the actual author name David González López-Tercero; `bme280-observatory` also has a `SPDX-FileCopyrightText` header with an email address. | No license or SPDX identifier was chosen. A maintainer decision is required before adding `LICENSE` and first-party authorship/license headers. Third-party notices must not be changed. |
+| Resolved (licensing decision) | The project had no license choice or first-party code headers. | The maintainer selected GPL-3.0-or-later. The root `LICENSE`, README notice, and first-party source headers now state that choice. Third-party notices and licenses remain separate and unchanged. |
 
 No changes were made to JPEG overlay rendering, telemetry JSON, camera ownership, the capture schedule, MQTT payload semantics, saved-settings schema, auth flow, credential files, or export behavior. No duplicate/unused implementation was removed during this focused change; the existing suites were retained.
+
+The copyright name and 2026 year follow the repository merge author and the convention in the owner's GPL-licensed projects; no existing source attribution was overwritten. Available GitHub history also includes Copilot-authored commits co-authored by the owner. Commit metadata does not independently establish the copyright status of every contribution, so maintainers should confirm this uniform attribution is appropriate before distribution. The tracked tree contains no vendored third-party implementation or generated source. Browser code is embedded in first-party Java; the manifest and example properties file are configuration, while documentation and `.gitignore` are not source-code files. Build dependencies are fetched outside the tracked tree and retain their upstream terms. These formats are excluded from source-header coverage; project-level licensing is stated in README and `LICENSE`.
 
 ## Changes in this release
 
@@ -25,6 +27,7 @@ No changes were made to JPEG overlay rendering, telemetry JSON, camera ownership
 - Group separators are CSS borders between adjacent visible group sections, so disabled groups create no empty heading or leading/trailing separator. Panel resizing, font-size changes, and telemetry refreshes trigger a fresh width measurement.
 - Settings are grouped in the requested order into titled sections and responsive columns. Existing camera-advertised controls and persisted field names remain in use; overlay fields and telemetry groups remain independent. Browser settings continue to omit credentials and report validation failures without partial writes.
 - Release metadata is advanced together to versionName `0.8.0` and versionCode `8`. The optional Python snapshot-helper documentation no longer describes the native server as future work.
+- First-party sources, tests, and scripts are marked GPL-3.0-or-later; no application version change was needed.
 
 ## Test inventory and evidence
 
@@ -32,10 +35,12 @@ No changes were made to JPEG overlay rendering, telemetry JSON, camera ownership
 
 Current automated evidence for this change:
 
-- `bash test/run.sh` — passed after the viewer changes and the 0.8.0 version update.
+- `bash test/license-headers-test.sh` — passed; the root GPL version/date and SPDX/copyright headers on tracked first-party sources are present.
+- `bash test/run.sh` — passed: 17 Java programs and three shell suites, including the header/license check.
+- `bash -n build.sh scripts/*.sh test/*.sh` and Python AST parsing for `scripts/*.py` — passed.
 - `git diff --check` — passed.
-- `bash build.sh` — not completed; the environment exits immediately with `Missing tool: aapt2`. No APK was built, installed, or tested.
-- Samsung/browser/MQTT-broker manual validation — not performed.
+- `bash build.sh` — not completed; exited immediately with `Missing tool: aapt2`. No APK was built, installed, or tested.
+- Device/browser/MQTT-broker manual validation — not performed for this licensing-only change.
 
 The existing Java tests for HTTP/config and image transforms pass, but there is no real browser automation or Android instrumentation suite here. A successful host suite does not establish Samsung-specific Camera2 support or visual layout behavior.
 

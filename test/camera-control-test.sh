@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 David González López-Tercero
+# SPDX-License-Identifier: GPL-3.0-or-later
+# See LICENSE in the repository root for licensing details.
+
 # Tests scripts/camera-control.sh against a fake adb. No device needed. Run: bash test/camera-control-test.sh
 set -uo pipefail
 cd "$(dirname "$0")/.."

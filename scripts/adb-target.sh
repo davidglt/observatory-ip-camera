@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 David González López-Tercero
+# SPDX-License-Identifier: GPL-3.0-or-later
+# See LICENSE in the repository root for licensing details.
+
 # Resolve the adb TARGET (serial or host:port) for Observatory IP Camera tooling in Termux over SSH.
 #
 # Precedence: -s/--target SERIAL, then the existing TARGET variable, then the single authorized device
