@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2026 David González López-Tercero
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * See LICENSE in the repository root for licensing details.
+ */
+
 package local.termux.observatorycamera;
 
 /** Camera2 JPEG_ORIENTATION calculation, following the official Camera2 reference example. */

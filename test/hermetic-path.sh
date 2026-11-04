@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 David González López-Tercero
+# SPDX-License-Identifier: GPL-3.0-or-later
+# See LICENSE in the repository root for licensing details.
+
 # Sourced by shell tests. hermetic_path DIR builds DIR with wrapper scripts for an allowlist of standard tools only,
 # resolved from the inherited PATH, and prints DIR. Tests then use PATH="<fakes>:DIR" so installed user tools
 # (wireless-debugging, adb, aapt2, apksigner, keytool, ...) are never reachable and "command not found" is real.

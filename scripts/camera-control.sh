@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 David González López-Tercero
+# SPDX-License-Identifier: GPL-3.0-or-later
+# See LICENSE in the repository root for licensing details.
+
 # Non-touch control of Observatory IP Camera over authorized adb (for SSH-only use in Termux).
 # Always requires an explicit adb target; never auto-selects a device and has no default port.
 set -uo pipefail

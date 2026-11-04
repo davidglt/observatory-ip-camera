@@ -21,7 +21,7 @@ The current automated test evidence and limits are in [Testing and validation](#
 - [Troubleshooting](#troubleshooting)
 - [Security](#operation-and-security)
 - [Testing and validation](#testing-and-validation)
-- [License status](#license-status)
+- [License](#license)
 
 ## Setup, build, installation, and updates
 
@@ -433,9 +433,25 @@ For APK compilation and signing, follow [Build in Termux](#build-in-termux). A s
 
 Do not include admin tokens, MQTT credentials, signing files, private camera images, or unredacted logs in bug reports.
 
-## License status
+## License
 
-This repository currently has no `LICENSE`. Accessible repositories owned by davidglt do not establish one consistent license: `bme280-observatory`, `wireless-debugging`, `retro_selector`, and `sharpcap-sequence-analyzer` use GPL-3.0-or-later, while `bmx280_win` uses Apache-2.0. No license or SPDX header is selected here; a maintainer decision is required before adding the project license and first-party code headers. Third-party notices and licenses must remain separate and unchanged.
+Copyright (C) 2026 David González López-Tercero.
+
+The first-party code in this project is licensed under the GNU General Public
+License, version 3, or (at your option) any later version.
+SPDX-License-Identifier: GPL-3.0-or-later. See [LICENSE](LICENSE) for the
+complete license text.
+
+First-party Java sources, shell and Python scripts, and tests carry matching
+SPDX and copyright headers. Browser HTML, CSS, and JavaScript are embedded in
+Java sources and covered by those headers. The tracked tree contains no
+vendored third-party implementation or generated source; build dependencies
+are fetched separately and remain subject to their own licenses and notices.
+The Android manifest and camera-properties example are configuration, not
+source code, and use this README and the root `LICENSE` as their project-level
+license notice. Documentation and `.gitignore` are also excluded from
+source-header checks. Any third-party notices must remain separate and
+unchanged.
 
 ## JPEG orientation
 

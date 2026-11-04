@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 David González López-Tercero
+# SPDX-License-Identifier: GPL-3.0-or-later
+# See LICENSE in the repository root for licensing details.
+
 # SSH-only deployment in Termux: tests -> build -> authorized adb install -> version verification.
 # Reuses test/run.sh and build.sh (including their signing logic) and scripts/adb-target.sh.
 # Works from any working directory. Never installs packages, uninstalls, clears data, downgrades,
