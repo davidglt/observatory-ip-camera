@@ -137,6 +137,7 @@ public final class SnapshotHttpServerTest {
                 && viewerText.contains("<legend>Image overlay</legend>")
                 && viewerText.contains("<legend>Telemetry panel</legend>")
                 && viewerText.contains("<legend>MQTT / Environmental sensor</legend>")
+                && viewerText.contains("#settings .settings-section>legend,#settings .settings-subgroup>legend{grid-column:1/-1")
                 && viewerText.contains("settings-section") && viewerText.contains("@media(max-width:600px)"),
                 "settings are grouped into titled sections with narrow-screen columns");
             check(viewerText.contains("text.textContent=String(value)")
