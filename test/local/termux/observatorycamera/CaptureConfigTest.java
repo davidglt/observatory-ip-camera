@@ -25,9 +25,10 @@ public final class CaptureConfigTest {
     public static void main(String[] args) {
         CaptureConfig d = CaptureConfig.defaults();
         check(d.overlayEnabled && d.location.equals("NYX") && d.position.equals("bottom-left"), "defaults");
+        check(d.panelServer, "server telemetry remains visible by default");
         check(d.targetFpsTenths == 10 && d.targetIntervalNanos() == 1_000_000_000L, "default 1 FPS");
         check(d.jpegSize.equals("auto"), "legacy files retain automatic default resolution");
-        check(legacyDescription(d).equals("overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps target_fps=1.0 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), d.describe());
+        check(legacyDescription(d).equals("overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps target_fps=1.0 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on panel_server=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), d.describe());
         check(d.fields == CaptureConfig.ALL_FIELDS && !d.hasField(CaptureConfig.FIELD_TEMPERATURE)
             && !d.hasField(CaptureConfig.FIELD_BATTERY) && !d.hasField(CaptureConfig.FIELD_THERMAL),
             "new overlay fields default off");
@@ -47,19 +48,21 @@ public final class CaptureConfigTest {
         check(CaptureConfig.parse("target_fps=922337203685477580.8", d).error.equals("invalid-target_fps:outside-representable-range"), "overflow has clear error");
         check(ok("jpeg_size=1920x1080").jpegSize.equals("1920x1080"), "explicit JPEG size");
         check(legacyDescription(ok("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime,frames"))
-            .equals("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime target_fps=1.0 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), "legacy frame field is discarded");
+            .equals("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime target_fps=1.0 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on panel_server=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), "legacy frame field is discarded");
         check(ok("fields=frames,location").fieldsString().equals("location"), "legacy frame field is ignored");
         check(ok("fields=").fieldsString().equals("none") && ok("fields=none").fieldsString().equals("none"),
             "empty field selection is explicit");
         check(ok("fields=location,datetime,fps").fieldsString().equals("location,datetime,fps"), "visible field order");
-        CaptureConfig configured = ok("fields=location,temperature,humidity,pressure,battery,battery_temperature,charging,thermal text_color=#aBcDeF telemetry_position=left panel_enabled=off panel_text_color=#123456 panel_background_color=#abcdef panel_text_size=32 panel_environment=off panel_device=on panel_capture=off mqtt_host=broker.example mqtt_port=8883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=on mqtt_stale_seconds=600");
+        CaptureConfig configured = ok("fields=location,temperature,humidity,pressure,battery,battery_temperature,charging,thermal text_color=#aBcDeF telemetry_position=left panel_enabled=off panel_text_color=#123456 panel_background_color=#abcdef panel_text_size=32 panel_environment=off panel_device=on panel_capture=off panel_server=off mqtt_host=broker.example mqtt_port=8883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=on mqtt_stale_seconds=600");
         check(configured.fieldsString().equals("location,temperature,humidity,pressure,battery,battery_temperature,charging,thermal")
             && !configured.panelEnabled && !configured.panelEnvironment && configured.panelDevice
-            && !configured.panelCapture && configured.panelTextColor.equals("#123456")
+            && !configured.panelCapture && !configured.panelServer && configured.panelTextColor.equals("#123456")
             && configured.textColor.equals("#ABCDEF") && configured.telemetryPosition.equals("left")
             && configured.panelBackgroundColor.equals("#ABCDEF")
             && configured.mqttHost.equals("broker.example") && configured.mqttPort == 8883
             && configured.mqttTls && configured.mqttStaleSeconds == 600, "telemetry settings round trip");
+        check(CaptureConfig.fromEntries(configured.toMap()).config.toMap().equals(configured.toMap()),
+            "server visibility setting round trips through properties");
         check(ok("text_color=#abcdef").toMap().get("text_color").equals("#ABCDEF")
             && ok("text_color=green").textColor.equals("green"), "RGB colors canonicalize and legacy green remains valid");
         check(ok("telemetry_position=right").telemetryPosition.equals("right")
@@ -87,7 +90,7 @@ public final class CaptureConfigTest {
             "target_fps=1.25", "target_fps=1.", "target_fps=.5", "target_fps=-1", "target_fps=NaN", "target_fps=Infinity",
             "target_fps=922337203685477581", "text_color=red", "text_color=#12345", "panel_text_color=red",
             "panel_background_color=#12345", "telemetry_position=middle",
-            "panel_text_size=9", "panel_text_size=49", "panel_environment=yes", "mqtt_host=bad/host",
+            "panel_text_size=9", "panel_text_size=49", "panel_environment=yes", "panel_server=yes", "mqtt_host=bad/host",
             "mqtt_port=0", "mqtt_port=65536", "mqtt_host=-bad.example", "mqtt_topic=bad topic", "mqtt_topic=room/#/other",
             "mqtt_tls=yes", "mqtt_stale_seconds=9", "listen_addresses=", "listen_addresses=0.0.0.0,127.0.0.1",
             "listen_addresses=127.0.0.1,127.0.0.1", "listen_addresses=127.0.0.256", "http_port=0",

@@ -17,7 +17,10 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 
 /**
  * Owns the snapshot HTTP server. Started only by an explicit user action in MainActivity or the shell-protected ControlActivity (ACTION_START)
@@ -36,6 +39,25 @@ public final class SnapshotHttpService extends Service {
     /** Notified on the main thread whenever the confirmed state changes. */
     public interface Listener { void onServerStateChanged(); }
 
+    static final class Telemetry {
+        final String state;
+        final String requestedListeners;
+        final String effectiveListeners;
+        final String listenerError;
+        final int activeConnections;
+        final int activeStreams;
+
+        Telemetry(String state, String requestedListeners, String effectiveListeners, String listenerError,
+                  int activeConnections, int activeStreams) {
+            this.state = state;
+            this.requestedListeners = requestedListeners;
+            this.effectiveListeners = effectiveListeners;
+            this.listenerError = listenerError;
+            this.activeConnections = activeConnections;
+            this.activeStreams = activeStreams;
+        }
+    }
+
     private static volatile boolean running;
     private static volatile String lastError;
     private static volatile String boundEndpoints = "none";
@@ -53,6 +75,19 @@ public final class SnapshotHttpService extends Service {
             + (networkError == null ? "" : "; error: " + networkError) + "; certificate: " + certificateStatus;
     }
 
+    static Telemetry telemetry(CaptureConfig requested) {
+        SnapshotHttpService current = instance;
+        String state = running ? "running" : lastError == null ? "stopped" : "error";
+        String listenerError = networkError;
+        if (listenerError == null)
+            listenerError = current == null || current.serverCounters.listenerError == null
+                ? "none" : current.serverCounters.listenerError;
+        return new Telemetry(state, describeRequested(requested), boundEndpoints,
+            listenerError,
+            current == null ? 0 : current.serverCounters.activeConnections.get(),
+            current == null ? 0 : current.serverCounters.activeStreams.get());
+    }
+
     private static String describeRequested(CaptureConfig config) {
         java.util.List<String> endpoints = new java.util.ArrayList<>();
         for (String address : config.listenAddresses.split(",")) {
@@ -63,7 +98,8 @@ public final class SnapshotHttpService extends Service {
     }
 
     private final Handler main = new Handler(Looper.getMainLooper());
-    private SnapshotHttpServer server;
+    private final SnapshotHttpServer.Counters serverCounters = new SnapshotHttpServer.Counters();
+    private volatile SnapshotHttpServer server;
     private CaptureConfig serverConfig;
     private String requestId = "-";
 
@@ -130,6 +166,7 @@ public final class SnapshotHttpService extends Service {
         }
         boundEndpoints = String.join(", ", server.getBoundEndpoints());
         certificateStatus = certificateSummary(config);
+        serverCounters.listenerError = null;
         TelemetryRuntime.start(this);
         manager.notify(NOTIFICATION_ID, buildNotification("Listening on " + boundEndpoints
             + ". Viewer and public telemetry remain unauthenticated."));
@@ -144,11 +181,24 @@ public final class SnapshotHttpService extends Service {
         SnapshotHttpServer created = new SnapshotHttpServer(new File(getFilesDir(), "snapshot.jpg"), config,
             identity == null ? null : identity.context, identity == null ? null : identity.publicPem(),
             message -> Log.i(TAG, message), new AdminTokenStore(getFilesDir()), new SnapshotAdminApi(this),
-            () -> new SnapshotHttpServer.ApiResult(200, "OK", TelemetrySnapshot.read(this).toJson()));
+            () -> new SnapshotHttpServer.ApiResult(200, "OK", TelemetrySnapshot.read(this).toJson()),
+            readProjectLicense(), serverCounters);
         created.setOnTerminated(() -> main.post(() -> {
             if (server == created) fail("Network listener thread ended unexpectedly.");
         }));
         return created;
+    }
+
+    private String readProjectLicense() throws IOException {
+        try (InputStream input = getAssets().open("LICENSE"); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                if (output.size() + count > 65536) throw new IOException("Bundled license exceeds the allowed size.");
+                output.write(buffer, 0, count);
+            }
+            return output.toString("UTF-8");
+        }
     }
 
     static String applyNetworkSettings(CaptureConfig config) {
@@ -174,6 +224,7 @@ public final class SnapshotHttpService extends Service {
         boundEndpoints = String.join(", ", replacement.getBoundEndpoints());
         certificateStatus = certificateSummary(config);
         networkError = null;
+        serverCounters.listenerError = null;
         if (previous != null) previous.stop();
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification("Listening on " + boundEndpoints

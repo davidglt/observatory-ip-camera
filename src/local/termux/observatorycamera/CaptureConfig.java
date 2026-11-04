@@ -37,6 +37,7 @@ public final class CaptureConfig {
     public static final String PANEL_ENVIRONMENT = "panel_environment";
     public static final String PANEL_DEVICE = "panel_device";
     public static final String PANEL_CAPTURE = "panel_capture";
+    public static final String PANEL_SERVER = "panel_server";
     public static final String MQTT_HOST = "mqtt_host";
     public static final String MQTT_PORT = "mqtt_port";
     public static final String MQTT_TOPIC = "mqtt_topic";
@@ -110,6 +111,7 @@ public final class CaptureConfig {
     public final boolean panelEnvironment;
     public final boolean panelDevice;
     public final boolean panelCapture;
+    public final boolean panelServer;
     public final String mqttHost;
     public final int mqttPort;
     public final String mqttTopic;
@@ -138,7 +140,7 @@ public final class CaptureConfig {
                           long targetFpsTenths, String jpegSize, String textColor, String telemetryPosition,
                           boolean panelEnabled, String panelTextColor,
                           String panelBackgroundColor, int panelTextSize, boolean panelEnvironment,
-                          boolean panelDevice, boolean panelCapture, String mqttHost, int mqttPort,
+                          boolean panelDevice, boolean panelCapture, boolean panelServer, String mqttHost, int mqttPort,
                           String mqttTopic, boolean mqttTls, int mqttStaleSeconds, String focusMode,
                           float focusDistanceDiopters, String exposureMode, int exposureCompensation,
                           boolean aeLock, int iso, long exposureTimeNanos, String whiteBalance,
@@ -161,6 +163,7 @@ public final class CaptureConfig {
         this.panelEnvironment = panelEnvironment;
         this.panelDevice = panelDevice;
         this.panelCapture = panelCapture;
+        this.panelServer = panelServer;
         this.mqttHost = mqttHost;
         this.mqttPort = mqttPort;
         this.mqttTopic = mqttTopic;
@@ -189,7 +192,7 @@ public final class CaptureConfig {
     /** Conservative defaults: overlay on, NYX, bottom-left, size 24 (at 720 px short side), all visible fields, 1.0 FPS target. */
     public static CaptureConfig defaults() {
         return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10, "auto",
-            TEXT_COLOR_GREEN, "right", true, "#FF0000", "#000000", 16, true, true, true,
+            TEXT_COLOR_GREEN, "right", true, "#FF0000", "#000000", 16, true, true, true, true,
             "", 1883, "homeassistant/nyx/reading", false, 120, "auto", 0f, "auto", 0, false,
             100, 10_000_000L, "auto", false, 90, "auto", 0, false,
             true, 8080, false, 8443, "0.0.0.0");
@@ -220,6 +223,7 @@ public final class CaptureConfig {
         boolean panelEnvironment;
         boolean panelDevice;
         boolean panelCapture;
+        boolean panelServer;
         String mqttHost;
         int mqttPort;
         String mqttTopic;
@@ -250,6 +254,7 @@ public final class CaptureConfig {
             panelEnabled = c.panelEnabled; panelTextColor = c.panelTextColor;
             panelBackgroundColor = c.panelBackgroundColor; panelTextSize = c.panelTextSize;
             panelEnvironment = c.panelEnvironment; panelDevice = c.panelDevice; panelCapture = c.panelCapture;
+            panelServer = c.panelServer;
             mqttHost = c.mqttHost; mqttPort = c.mqttPort; mqttTopic = c.mqttTopic; mqttTls = c.mqttTls;
             mqttStaleSeconds = c.mqttStaleSeconds;
             focusMode = c.focusMode; focusDistanceDiopters = c.focusDistanceDiopters;
@@ -264,7 +269,7 @@ public final class CaptureConfig {
             return new CaptureConfig(overlay, location, position, textSize, fields, fps, jpegSize,
                 textColor, telemetryPosition, panelEnabled, panelTextColor, panelBackgroundColor,
                 panelTextSize, panelEnvironment,
-                panelDevice, panelCapture, mqttHost, mqttPort, mqttTopic, mqttTls, mqttStaleSeconds,
+                panelDevice, panelCapture, panelServer, mqttHost, mqttPort, mqttTopic, mqttTls, mqttStaleSeconds,
                 focusMode, focusDistanceDiopters, exposureMode, exposureCompensation, aeLock, iso,
                 exposureTimeNanos, whiteBalance, awbLock, jpegQuality, orientationMode,                 rotationDegrees, mirror, httpEnabled, httpPort, httpsEnabled, httpsPort, listenAddresses);
         }
@@ -346,10 +351,12 @@ public final class CaptureConfig {
             case PANEL_ENVIRONMENT:
             case PANEL_DEVICE:
             case PANEL_CAPTURE:
+            case PANEL_SERVER:
                 if (!value.equals("on") && !value.equals("off")) return "invalid-" + key + ":expected-on-or-off";
                 if (key.equals(PANEL_ENVIRONMENT)) d.panelEnvironment = value.equals("on");
                 else if (key.equals(PANEL_DEVICE)) d.panelDevice = value.equals("on");
-                else d.panelCapture = value.equals("on");
+                else if (key.equals(PANEL_CAPTURE)) d.panelCapture = value.equals("on");
+                else d.panelServer = value.equals("on");
                 return null;
             case MQTT_HOST:
                 if (!validMqttHost(value))
@@ -554,6 +561,7 @@ public final class CaptureConfig {
         m.put(PANEL_ENVIRONMENT, panelEnvironment ? "on" : "off");
         m.put(PANEL_DEVICE, panelDevice ? "on" : "off");
         m.put(PANEL_CAPTURE, panelCapture ? "on" : "off");
+        m.put(PANEL_SERVER, panelServer ? "on" : "off");
         m.put(MQTT_HOST, mqttHost);
         m.put(MQTT_PORT, Integer.toString(mqttPort));
         m.put(MQTT_TOPIC, mqttTopic);

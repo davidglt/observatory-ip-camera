@@ -27,10 +27,39 @@ public final class NetworkListenerTest {
         File image = new File(directory, "snapshot.jpg");
         try {
             testMultipleAddressesAndRollback(directory, image);
+            testSharedCountersAcrossReplacement(image);
             testTlsAndOriginProtection(directory, image);
             System.out.println("NetworkListenerTest passed");
         } finally {
             deleteTree(directory);
+        }
+    }
+
+    private static void testSharedCountersAcrossReplacement(File image) throws Exception {
+        SnapshotHttpServer.Counters counters = new SnapshotHttpServer.Counters();
+        int firstPort = availablePort();
+        SnapshotHttpServer first = new SnapshotHttpServer(image,
+            accepted("http_port=" + firstPort + " listen_addresses=127.0.0.1"), null, null,
+            message -> {}, null, null, null, null, counters);
+        SnapshotHttpServer replacement = null;
+        Socket client = null;
+        try {
+            first.start();
+            int secondPort = availablePort();
+            replacement = new SnapshotHttpServer(image,
+                accepted("http_port=" + secondPort + " listen_addresses=127.0.0.1"), null, null,
+                message -> {}, null, null, null, null, counters);
+            client = new Socket(InetAddress.getByName("127.0.0.1"), firstPort);
+            awaitCounts(first, 1, 0);
+            replacement.start();
+            check(replacement.getActiveConnections() == 1, "listener replacement shares connection counts");
+            first.stop();
+            awaitCounts(replacement, 0, 0);
+            check(replacement.isRunning(), "stopping replaced listeners keeps the new listener active");
+        } finally {
+            if (client != null) client.close();
+            first.stop();
+            if (replacement != null) replacement.stop();
         }
     }
 
@@ -93,6 +122,10 @@ public final class NetworkListenerTest {
         SSLContext client = trustedContext(identity.certificate);
         try {
             server.start();
+            Socket failedHandshake = new Socket(InetAddress.getByName("127.0.0.1"), port);
+            awaitCounts(server, 1, 0);
+            failedHandshake.close();
+            awaitCounts(server, 0, 0);
             check(server.getBoundEndpoints().get(0).startsWith("https://127.0.0.1:"), "HTTPS-only binding status");
             String host = "camera.example:" + port;
             check(tlsRequest(client, port, host, "GET", "/", "", new byte[0]).contains("200 OK"),
@@ -178,6 +211,16 @@ public final class NetworkListenerTest {
 
     private static int availablePort() throws Exception {
         try (ServerSocket socket = new ServerSocket(0)) { return socket.getLocalPort(); }
+    }
+
+    private static void awaitCounts(SnapshotHttpServer server, int connections, int streams) throws Exception {
+        long deadline = System.nanoTime() + 3_000_000_000L;
+        while (System.nanoTime() < deadline) {
+            if (server.getActiveConnections() == connections && server.getActiveStreams() == streams) return;
+            Thread.sleep(10);
+        }
+        throw new AssertionError("active counts expected " + connections + "/" + streams + " but was "
+            + server.getActiveConnections() + "/" + server.getActiveStreams());
     }
 
     private static void deleteTree(File file) {

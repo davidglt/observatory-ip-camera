@@ -81,6 +81,8 @@ panel_text_size=16
 panel_environment=on
 panel_device=on
 panel_capture=on
+# Show requested/effective listeners, listener errors, and active connections/streams. Default: on
+panel_server=on
 
 # Optional BME280 MQTT subscriber. An empty host disables MQTT.
 # Configure only a broker you control; no host or username/password is assumed.
