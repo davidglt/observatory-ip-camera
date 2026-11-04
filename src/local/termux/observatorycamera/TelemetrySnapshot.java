@@ -145,25 +145,23 @@ final class TelemetrySnapshot {
                 ? null : processMetrics.latest.cpuPercent, processMetrics.sampleCount < 2, 2, " %"));
             lines.add("CPU recent average (% of one core): " + processValue(processMetrics.recentAverageCpuPercent,
                 processMetrics.sampleCount < 2, 2, " %"));
-            lines.add("Current process PSS: " + processValue(processMetrics.latest == null
-                ? null : processMetrics.latest.pssKb, false, 0, " KB"));
-            lines.add("Observed PSS peak: " + processValue(processMetrics.observedPeakPssKb, false, 0, " KB"));
+            lines.add("Current process PSS: " + memoryValue(processMetrics.latest == null
+                ? null : processMetrics.latest.pssKb));
+            lines.add("Observed PSS peak: " + memoryValue(processMetrics.observedPeakPssKb));
             lines.add("Process uptime: " + uptimeValue());
             lines.add("System");
-            lines.add("Available RAM: " + processValue(processMetrics.latest == null
-                ? null : processMetrics.latest.availableRamKb, false, 0, " KB"));
-            lines.add("Total RAM: " + processValue(processMetrics.latest == null
-                ? null : processMetrics.latest.totalRamKb, false, 0, " KB"));
+            lines.add("Available RAM: " + memoryValue(processMetrics.latest == null
+                ? null : processMetrics.latest.availableRamKb));
+            lines.add("Total RAM: " + memoryValue(processMetrics.latest == null
+                ? null : processMetrics.latest.totalRamKb));
             lines.add("Android low-memory status: " + lowMemoryValue());
         }
         if (config.panelCapture) {
             lines.add("Capture");
             lines.add("Capture state: " + (captureState.equals(ContinuousStatus.STOPPED) ? "Not capturing" : captureState));
             lines.add("Latest image age: " + (imageAgeSeconds == null ? "--" : fixed(imageAgeSeconds, 1) + " s"));
-            lines.add("FPS actual/requested: " + (actualFps == null ? "--" : fixed(actualFps, 2)) + " / "
-                + (requestedFps == null ? "--" : fixed(requestedFps, 1)));
-            lines.add("Frame processing (ms; last-session statistics when stopped): " + value(processingLastMs) + " / "
-                + value(processingAverageMs) + " / " + value(processingMaximumMs));
+            lines.add("FPS: " + TelemetryDisplayFormat.fps(actualFps) + " / "
+                + TelemetryDisplayFormat.fps(requestedFps));
         }
         if (config.panelServer) {
             lines.add("Server");
@@ -171,8 +169,8 @@ final class TelemetrySnapshot {
             lines.add("Requested listeners: " + serverTelemetry.requestedListeners);
             lines.add("Effective listeners: " + serverTelemetry.effectiveListeners);
             lines.add("Listener errors: " + serverTelemetry.listenerError);
-            lines.add("Active connections: " + serverTelemetry.activeConnections);
-            lines.add("Active MJPEG streaming clients: " + serverTelemetry.activeStreams);
+            lines.add("HTTP/S connections: " + serverTelemetry.activeConnections);
+            lines.add("MJPEG connections: " + serverTelemetry.activeStreams);
         }
         return lines;
     }
@@ -192,6 +190,12 @@ final class TelemetrySnapshot {
         return text + unit + staleSuffix();
     }
 
+    private String memoryValue(Number value) {
+        if (processMetrics.latest == null) return "Collecting";
+        if (value == null) return "Unavailable";
+        return TelemetryDisplayFormat.memoryKilobytes(value) + staleSuffix();
+    }
+
     private String uptimeValue() {
         if (processMetrics.latest == null) return "Collecting";
         Long millis = processMetrics.latest.uptimeMillis;
@@ -208,7 +212,6 @@ final class TelemetrySnapshot {
 
     private String staleSuffix() { return processMetrics.isStale() ? " (stale)" : ""; }
 
-    private static String value(Double n) { return n == null ? "--" : fixed(n, 1); }
     private static String fixed(double value, int digits) { return String.format(Locale.ROOT, "%." + digits + "f", value); }
 
     private static void add(StringBuilder out, String key, String value) {
