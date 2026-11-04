@@ -159,6 +159,8 @@ FAKE_LOGLINE="cmd=config-set result=config overlay=off applied=next-frame" expec
 grep -q -- "--es config 'overlay=off'" "$FAKE_LOG" && echo "ok config passed single-quoted" || { echo "FAIL config quoting"; fails=$((fails+1)); }
 FAKE_LOGLINE="cmd=config-set result=config fields=none applied=next-frame" expect config-set-no-fields 0 "fields=none" -s T --no-wake --timeout 5 config-set fields=
 grep -q -- "--es config 'fields='" "$FAKE_LOG" && echo "ok empty field selection passed" || { echo "FAIL empty field selection quoting"; fails=$((fails+1)); }
+FAKE_LOGLINE="cmd=config-set result=config saved=true network=not-applied networkError=network-bind-failed" \
+    expect config-listener-apply-failed 3 "listeners were unchanged" -s T --no-wake --timeout 5 config-set http_port=8081
 export FAKE_LOGLINE="cmd=config-set result=config panel_text_color=#123456 mqtt_host= applied=next-frame"
 expect telemetry-config-set 0 "panel_text_color=#123456" -s T --no-wake --timeout 5 config-set \
     panel_text_color=#123456 mqtt_host= mqtt_topic=homeassistant/nyx/reading
@@ -200,6 +202,8 @@ if grep -Fq 'private-password' "$FAKE_LOG" "$FAKE_LOGCAT"; then
     echo "FAIL certificate password leaked to adb command/log output"; fails=$((fails+1))
 else echo "ok certificate password absent from adb command and log output"; fi
 expect certificate-generate-invalid-san 2 "Invalid IP/DNS SAN" -s T certificate-generate --san 'IP:999.2.3.4'
+expect certificate-generate-leading-zero-ip 2 "Invalid IP/DNS SAN" -s T certificate-generate --san 'IP:008.2.3.4'
+expect certificate-generate-invalid-dns 2 "Invalid IP/DNS SAN" -s T certificate-generate --san 'DNS:camera..example'
 export FAKE_TOKEN=$(printf 'A%.0s' $(seq 1 43))
 FAKE_LOGLINE="cmd=admin-token-show result=ready token_file=http-admin.token" expect admin-token-show 0 "plaintext HTTP.*$FAKE_TOKEN" -s T --no-wake --timeout 5 admin-token-show
 FAKE_LOGLINE="cmd=admin-token-rotate result=rotated token_file=http-admin.token" expect admin-token-rotate 0 "plaintext HTTP.*$FAKE_TOKEN" -s T --no-wake --timeout 5 admin-token-rotate

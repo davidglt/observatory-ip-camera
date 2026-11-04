@@ -321,7 +321,7 @@ cmd_start() {
         sleep 1
     done
     # The app logged 'listening'; verify the real listener independently.
-    wait_http_state up || die $EX_TIMEOUT "Timeout: app reported listening but no ObservatoryNative HTTP response on device port $APP_PORT."
+    wait_http_state up || die $EX_TIMEOUT "Timeout: app reported listening but requested endpoints did not all respond: $PROBE_DETAIL"
     echo "RUNNING: $(describe_http "$HTTP_CODE"); endpoints: $PROBE_DETAIL"
 }
 
@@ -486,6 +486,8 @@ cmd_config() { # config-show | config-set | config-reset
     send_control "$SUB" "$id" "$CONFIG"
     line=$(wait_control "$id" "$SUB" 'result=(config|failed)') || die $EX_TIMEOUT "Timeout waiting for the settings result."
     grep -q 'result=failed' <<<"$line" && die $EX_USAGE "Rejected, nothing changed: ${line#*reason=}"
+    grep -q 'network=not-applied' <<<"$line" \
+        && die $EX_FAIL "Settings were saved, but listeners were unchanged: ${line#*networkError=}. Fix the requested endpoints, then run network-apply."
     echo "Config: ${line#*result=config }"
 }
 
@@ -551,7 +553,7 @@ cmd_certificate_import() {
 }
 
 validate_san_list() {
-    local entry value octet
+    local entry value octet label
     local -a entries parts
     IFS=, read -r -a entries <<<"$SAN"
     for entry in "${entries[@]}"; do
@@ -561,12 +563,16 @@ validate_san_list() {
                 IFS=. read -r -a parts <<<"$value"
                 [[ ${#parts[@]} -eq 4 ]] || return 1
                 for octet in "${parts[@]}"; do
-                    [[ $octet =~ ^[0-9]{1,3}$ && $octet -le 255 ]] || return 1
+                    [[ $octet =~ ^(0|[1-9][0-9]{0,2})$ && $octet -le 255 ]] || return 1
                 done ;;
             DNS:*)
                 value=${entry#DNS:}
-                [[ ${#value} -le 253 && $value =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || return 1
-                [[ $value != *..* && $value != *.-* && $value != *-. ]] || return 1 ;;
+                [[ ${#value} -le 253 && $value =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ \
+                    && $value != *..* ]] || return 1
+                IFS=. read -r -a parts <<<"$value"
+                for label in "${parts[@]}"; do
+                    [[ ${#label} -le 63 && $label =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+                done ;;
             *) return 1 ;;
         esac
     done
