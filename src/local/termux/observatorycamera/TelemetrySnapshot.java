@@ -26,12 +26,14 @@ final class TelemetrySnapshot {
     final Double processingAverageMs;
     final Double processingMaximumMs;
     final ProcessMetrics.Snapshot processMetrics;
+    final CpuNormalization.Reading normalizedCpu;
     final SnapshotHttpService.Telemetry serverTelemetry;
     final CaptureConfig config;
     final OverlayTelemetry overlayTelemetry;
 
     private TelemetrySnapshot(String environmentState, EnvironmentalTelemetry.Reading environment,
                               DeviceTelemetry device, ContinuousStatus capture, ProcessMetrics.Snapshot processMetrics,
+                              CpuNormalization.Reading normalizedCpu,
                               SnapshotHttpService.Telemetry serverTelemetry, String serverState,
                               Double imageAgeSeconds, CaptureConfig config) {
         this.environmentState = environmentState;
@@ -50,6 +52,7 @@ final class TelemetrySnapshot {
         processingAverageMs = capture.frames > 0 ? capture.procAvgNanos / 1_000_000.0 : null;
         processingMaximumMs = capture.frames > 0 ? capture.procMaxNanos / 1_000_000.0 : null;
         this.processMetrics = processMetrics;
+        this.normalizedCpu = normalizedCpu;
         this.serverTelemetry = serverTelemetry;
         this.config = config;
         overlayTelemetry = new OverlayTelemetry(environment, batteryPercent, batteryTemperatureC, charging, thermalStatus);
@@ -64,14 +67,19 @@ final class TelemetrySnapshot {
         String envState = sensor.state(wall, TelemetryRuntime.staleMillis());
         if (!envState.equals("fresh")) reading = null;
         ContinuousStatus capture = ContinuousCaptureService.getStatus();
-        ProcessMetrics.Snapshot processMetrics = TelemetryRuntime.processMetrics();
+        ProcessMetrics.Snapshot processMetrics;
+        CpuNormalization.Reading normalizedCpu;
+        synchronized (TelemetryRuntime.class) {
+            processMetrics = TelemetryRuntime.processMetrics();
+            normalizedCpu = TelemetryRuntime.normalizedProcessCpu();
+        }
         SnapshotHttpService.Telemetry serverTelemetry = SnapshotHttpService.telemetry(config);
         java.io.File snapshot = new java.io.File(context.getFilesDir(), "snapshot.jpg");
         Double age = ImageAge.seconds(snapshot.isFile() ? snapshot.lastModified() : 0, wall);
         String server = SnapshotHttpService.isRunning() ? "running"
             : SnapshotHttpService.getLastError() == null ? "stopped" : "error";
         return new TelemetrySnapshot(envState, reading, DeviceTelemetry.read(context), capture,
-            processMetrics, serverTelemetry, server, age, config);
+            processMetrics, normalizedCpu, serverTelemetry, server, age, config);
     }
 
     String toJson() {
@@ -98,6 +106,12 @@ final class TelemetrySnapshot {
             ? null : processMetrics.latest.cpuPercent, processMetrics.sampleCount < 2, 2, " %"));
         add(json, "app_cpu_recent_average_percent", processValue(processMetrics.recentAverageCpuPercent,
             processMetrics.sampleCount < 2, 2, " %"));
+        add(json, "app_cpu_current_normalized_percent", nullableNumber(normalizedCpu.currentPercent), false);
+        add(json, "app_cpu_recent_average_normalized_percent", nullableNumber(normalizedCpu.recentAveragePercent), false);
+        add(json, "app_cpu_logical_count", normalizedCpu.logicalCpuCount == null
+            ? "null" : normalizedCpu.logicalCpuCount.toString(), false);
+        add(json, "app_cpu_normalized_stale", Boolean.toString(normalizedCpu.stale), false);
+        add(json, "app_cpu_normalized_state", normalizedCpuState());
         add(json, "app_pss_kb", processValue(processMetrics.latest == null
             ? null : processMetrics.latest.pssKb, false, 0, ""));
         add(json, "app_pss_peak_kb", processValue(processMetrics.observedPeakPssKb, false, 0, ""));
@@ -173,6 +187,16 @@ final class TelemetrySnapshot {
             lines.add("MJPEG connections: " + serverTelemetry.activeStreams);
         }
         return lines;
+    }
+
+    private String normalizedCpuState() {
+        if (processMetrics.latest == null || processMetrics.sampleCount < 2) return "collecting";
+        if (normalizedCpu.currentPercent == null && normalizedCpu.recentAveragePercent == null) return "unavailable";
+        return normalizedCpu.stale ? "stale" : "available";
+    }
+
+    private static String nullableNumber(Double value) {
+        return value == null || !Double.isFinite(value) ? "null" : Double.toString(value);
     }
 
     private String processMetricsState() {
