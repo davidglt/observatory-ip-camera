@@ -70,6 +70,15 @@ public final class SnapshotHttpServerTest {
         }
     }
 
+    private static void awaitConnectionCount(SnapshotHttpServer server, int expected) throws Exception {
+        long deadline = System.nanoTime() + 3_000_000_000L;
+        while (System.nanoTime() < deadline) {
+            if (server.getActiveConnections() == expected) return;
+            Thread.sleep(10);
+        }
+        throw new AssertionError("active connections expected " + expected + " but was " + server.getActiveConnections());
+    }
+
     private static boolean runNode(String... args) throws Exception {
         List<String> command = new ArrayList<String>();
         command.add("node");
@@ -97,10 +106,11 @@ public final class SnapshotHttpServerTest {
         try {
             AdminTokenStore tokenStore = new AdminTokenStore(dir);
             String token = tokenStore.provision();
+            String projectLicense = new String(Files.readAllBytes(new File("LICENSE").toPath()), "UTF-8");
             SnapshotHttpServer server = new SnapshotHttpServer(image, 0, m -> { }, tokenStore,
                 (method, path, body) -> new SnapshotHttpServer.ApiResult(200, "OK", "{\"ok\":true}"),
                 () -> new SnapshotHttpServer.ApiResult(200, "OK",
-                    "{\"environment_state\":\"disabled\",\"telemetry_position\":\"left\"}"));
+                    "{\"environment_state\":\"disabled\",\"telemetry_position\":\"left\"}"), projectLicense);
             servers.add(server);
             check(!server.isRunning(), "not running before start");
             server.stop(); // stop before start is safe
@@ -111,7 +121,22 @@ public final class SnapshotHttpServerTest {
             server.start(); // repeated start: no second listener
             check(server.getLocalPort() == port, "repeated start keeps one listener");
 
+            List<Socket> concurrent = new ArrayList<>();
+            for (int i = 0; i < 6; i++) concurrent.add(new Socket(InetAddress.getByName("127.0.0.1"), port));
+            awaitConnectionCount(server, 6);
+            for (Socket socket : concurrent) socket.close();
+            awaitConnectionCount(server, 0);
+            check(server.getActiveStreams() == 0, "ordinary HTTP connections are not counted as streams");
+            check(indexOf(request(port, "GET", "/", "Host: evil.example\r\n", new byte[0]), "400 Bad Request") > 0,
+                "malformed request is rejected");
+            awaitConnectionCount(server, 0);
+
             check(indexOf(request(port, "GET", "/snapshot.jpg"), "404 Not Found") > 0, "404 before first snapshot");
+            byte[] licenseResponse = request(port, "GET", "/license.txt");
+            int licenseBody = indexOf(licenseResponse, "\r\n\r\n") + 4;
+            check(indexOf(licenseResponse, "200 OK") > 0 && indexOf(licenseResponse, "Content-Type: text/plain; charset=utf-8") > 0
+                && Arrays.equals(Arrays.copyOfRange(licenseResponse, licenseBody, licenseResponse.length),
+                    projectLicense.getBytes("UTF-8")), "complete bundled license is available without authentication");
             Files.write(image.toPath(), jpeg);
             byte[] response = request(port, "GET", "/snapshot.jpg?x=1");
             int body = indexOf(response, "\r\n\r\n") + 4;
@@ -139,9 +164,11 @@ public final class SnapshotHttpServerTest {
             check(viewerText.indexOf("id=\"about-button\"") > viewerText.indexOf("id=\"settings-button\"")
                 && viewerText.indexOf("id=\"about-button\"") < viewerText.indexOf("</header>")
                 && viewerText.contains("<p>Observatory IP Camera</p><p>Copyright (C) 2026 David González López-Tercero</p>"
-                    + "<p>License: GNU General Public License v3.0 or later</p>"
-                    + "<p>SPDX-License-Identifier: GPL-3.0-or-later</p>")
-                && viewerText.contains("id=\"about-close\""), "About button, panel and Close are present");
+                    + "<p>License: GPL-3.0-or-later (GNU General Public License v3.0 or later)</p>")
+                && !viewerText.contains("<p>SPDX-License-Identifier:")
+                && viewerText.contains("id=\"license-button\"") && viewerText.contains("id=\"license-back\"")
+                && viewerText.contains("id=\"license-close\"") && viewerText.contains("aria-modal=\"true\"")
+                && viewerText.contains("id=\"about-close\""), "About and complete license controls are present without a visible SPDX line");
             checkViewerScript(viewerText);
             check(!viewerText.contains(token) && viewerText.contains("Forget token")
                 && viewerText.contains("stream.mjpg"), "viewer has no embedded token and preserves stream");
@@ -154,6 +181,13 @@ public final class SnapshotHttpServerTest {
                 && viewerText.contains("@media(max-width:800px){#viewer,#viewer[data-telemetry-position]")
                 && viewerText.contains("$('viewer').dataset.telemetryPosition=d.telemetry_position"),
                 "panel position is saved, live-updated, and stacked below on narrow screens");
+            check(viewerText.contains("name=\"panel_server\"")
+                && viewerText.contains("server_requested_listeners")
+                && viewerText.contains("Active connections may include transient telemetry polls")
+                && viewerText.contains("not unique people or IP addresses")
+                && viewerText.contains("overflow-wrap:anywhere;word-break:normal")
+                && viewerText.contains("max-height:min(70vh,40rem)"),
+                "server visibility, connection definitions, and responsive long-value handling are present");
             check(viewerText.contains("name=\"text_color\" type=\"text\"")
                 && viewerText.contains("name=\"panel_text_color\" type=\"text\"")
                 && viewerText.contains("name=\"panel_background_color\" type=\"text\"")
@@ -185,7 +219,7 @@ public final class SnapshotHttpServerTest {
                 && viewerText.contains("settings-section") && viewerText.contains("@media(max-width:600px)"),
                 "settings are grouped into titled sections with narrow-screen columns");
             check(viewerText.contains("text.textContent=String(value)")
-                && viewerText.contains("['FPS',d.actual_fps+' / '+d.requested_fps]")
+                && viewerText.contains("['Capture FPS actual/requested (last session when stopped)',d.actual_fps+' / '+d.requested_fps]")
                 && viewerText.contains("margin-left:4ch;max-width:calc(100% - 4ch);white-space:normal;overflow-wrap:anywhere")
                 && viewerText.contains("nameWidth=Math.max(name.getBoundingClientRect().width,name.scrollWidth)")
                 && viewerText.contains(".telemetry-group+.telemetry-group{border-top:1px solid currentColor")

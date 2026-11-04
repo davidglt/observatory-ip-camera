@@ -54,14 +54,16 @@ public final class SnapshotHttpServer {
     private static final SecureRandom NONCES = new SecureRandom();
     private static final String VIEWER = "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
         + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Observatory camera</title>"
-        + "<style>body{margin:0;background:#111;color:#ccc;font-family:sans-serif;overflow-x:hidden}header{display:flex;align-items:center;gap:1em;padding:8px}"
+        + "<style>body{margin:0;background:#111;color:#ccc;font-family:sans-serif;overflow-x:hidden}header{display:flex;flex-wrap:wrap;align-items:center;gap:1em;padding:8px;min-width:0}"
         + "#viewer{display:grid;grid-template-columns:minmax(0,1fr) 260px;grid-template-areas:'image telemetry';gap:12px;padding:12px;align-items:start;min-width:0}"
         + "#viewer[data-telemetry-position=left]{grid-template-columns:260px minmax(0,1fr);grid-template-areas:'telemetry image'}"
-        + "img{grid-area:image;display:block;max-width:100%;height:auto;margin:0 auto}#telemetry{grid-area:telemetry;box-sizing:border-box;border:1px solid currentColor;background:#000;color:#f00;padding:12px;min-width:0;font:16px/1.45 monospace}"
+        + "img{grid-area:image;display:block;max-width:100%;height:auto;margin:0 auto}#telemetry{grid-area:telemetry;box-sizing:border-box;border:1px solid currentColor;background:#000;color:#f00;padding:12px;min-width:0;max-width:100%;overflow-wrap:anywhere;font:16px/1.45 monospace}"
         + "#telemetry h2{font:inherit;font-weight:bold;margin:0 0 .35em}#telemetry .telemetry-group{margin:0;padding:0}"
         + "#telemetry .telemetry-group+.telemetry-group{border-top:1px solid currentColor;margin-top:.7em;padding-top:.7em}"
+        + "#telemetry .telemetry-subgroup{margin:.5em 0 0;padding:0;min-width:0}#telemetry .telemetry-subgroup h3{font:inherit;font-weight:bold;margin:0}"
+        + "#telemetry .telemetry-note{margin:.5em 0 0;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}"
         + "#telemetry .telemetry-row{display:flex;align-items:baseline;gap:1ch;min-width:0}"
-        + "#telemetry .telemetry-value{display:inline-block;flex:none;min-width:0;max-width:100%;white-space:nowrap}"
+        + "#telemetry .telemetry-value{display:inline-block;flex:none;min-width:0;max-width:100%;white-space:nowrap;overflow-wrap:anywhere}"
         + "#telemetry .telemetry-row.stacked{flex-direction:column;align-items:flex-start;gap:0}"
         + "#telemetry .telemetry-row.stacked .telemetry-value{margin-left:4ch;max-width:calc(100% - 4ch);white-space:normal;overflow-wrap:anywhere}"
         + "p{margin:8px;font-size:small}#settings{padding:1em;background:#222;box-sizing:border-box;max-width:100%}"
@@ -72,17 +74,23 @@ public final class SnapshotHttpServer {
         + "#settings fieldset{min-width:0;margin:0;padding:10px;border:1px solid #666}"
         + "#settings .settings-section{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}"
         + "#settings .settings-section>legend,#settings .settings-subgroup>legend{grid-column:1/-1;font-weight:bold;padding:0 4px}"
-        + "#settings .settings-help{grid-column:1/-1;margin:0}"
+        + "#settings .settings-help{grid-column:1/-1;margin:0;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}"
+        + "#settings .check-row{min-width:0;overflow-wrap:anywhere;word-break:normal}"
         + "#image-controls{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;min-width:0}"
         + "#settings .settings-subgroup{display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:8px}"
-        + "#form button{font:inherit;margin:0}#result{grid-column:1/-1;white-space:pre-wrap;overflow-wrap:anywhere}"
+        + "#form button{font:inherit;margin:0}#result{grid-column:1/-1;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}"
         + "@media(max-width:800px){#viewer,#viewer[data-telemetry-position]{grid-template-columns:minmax(0,1fr);grid-template-areas:'image' 'telemetry'}}"
         + "@media(max-width:600px){#settings .settings-section,#image-controls{grid-template-columns:minmax(0,1fr)}#settings .settings-section>legend{grid-column:1/-1}}"
-        + "#about{padding:1em;background:#222;box-sizing:border-box;max-width:100%}#settings[hidden],#about[hidden]{display:none}</style>"
+        + "#about,#license-dialog{padding:1em;background:#222;box-sizing:border-box;max-width:100%;min-width:0}"
+        + "#license-content{max-height:70vh;max-height:min(70vh,40rem);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}"
+        + "#settings[hidden],#about[hidden],#license-dialog[hidden]{display:none}</style>"
         + "</head><body><header><strong>Observatory camera</strong><button id=\"settings-button\" type=\"button\">Settings</button><button id=\"about-button\" type=\"button\">About</button></header>"
         + "<section id=\"about\" hidden><h2>About</h2><p>Observatory IP Camera</p><p>Copyright (C) 2026 David González López-Tercero</p>"
-        + "<p>License: GNU General Public License v3.0 or later</p><p>SPDX-License-Identifier: GPL-3.0-or-later</p>"
-        + "<button id=\"about-close\" type=\"button\">Close</button></section>"
+        + "<p>License: GPL-3.0-or-later (GNU General Public License v3.0 or later)</p>"
+        + "<button id=\"license-button\" type=\"button\">License</button><button id=\"about-close\" type=\"button\">Close</button></section>"
+        + "<section id=\"license-dialog\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"license-title\" hidden>"
+        + "<h2 id=\"license-title\">Project license</h2><p>GPL-3.0-or-later</p><pre id=\"license-content\" tabindex=\"0\">Loading license…</pre>"
+        + "<button id=\"license-back\" type=\"button\">Back to About</button><button id=\"license-close\" type=\"button\">Close</button></section>"
         + "<section id=\"settings\" hidden><h2>Settings</h2><p>Metadata FPS is an informational estimate, not a limit or guaranteed throughput. Requested target and actual rate are separate.</p>"
         + "<label>Admin token <input id=\"token\" type=\"password\" autocomplete=\"off\"></label>"
         + "<button id=\"load\" type=\"button\">Load settings</button><button id=\"clear\" type=\"button\">Forget token</button>"
@@ -123,7 +131,8 @@ public final class SnapshotHttpServer {
         + "<fieldset class=\"settings-subgroup\"><legend>Visible telemetry groups</legend>"
         + "<label class=\"check-row\"><input type=\"checkbox\" name=\"panel_environment\">Environment</label>"
         + "<label class=\"check-row\"><input type=\"checkbox\" name=\"panel_device\">Device</label>"
-        + "<label class=\"check-row\"><input type=\"checkbox\" name=\"panel_capture\">Capture</label></fieldset></fieldset>"
+        + "<label class=\"check-row\"><input type=\"checkbox\" name=\"panel_capture\">Capture</label>"
+        + "<label class=\"check-row\"><input type=\"checkbox\" name=\"panel_server\">Server</label></fieldset></fieldset>"
         + "<fieldset class=\"settings-section\"><legend>MQTT / Environmental sensor</legend>"
         + "<label>Broker host (blank disables MQTT) <input name=\"mqtt_host\" maxlength=\"253\"></label>"
         + "<label>Broker port <input name=\"mqtt_port\" type=\"number\" min=\"1\" max=\"65535\"></label>"
@@ -143,9 +152,16 @@ public final class SnapshotHttpServer {
         + "<button type=\"submit\">Save settings</button></form><pre id=\"result\" aria-live=\"polite\"></pre></section>"
         + "<main id=\"viewer\"><img src=\"/stream.mjpg\" alt=\"Live camera stream\"><aside id=\"telemetry\" aria-label=\"Camera telemetry\" hidden></aside></main>"
         + "<p>Settings require the device-admin token.</p>"
-        + "<script nonce=\"__NONCE__\">(()=>{let token='',loadedNetwork='';const $=id=>document.getElementById(id),form=$('form'),result=$('result');"
+        + "<script nonce=\"__NONCE__\">(()=>{let token='',loadedNetwork='',licenseLoaded=false;const $=id=>document.getElementById(id),form=$('form'),result=$('result');"
         + "$('settings-button').onclick=()=>{$('settings').hidden=!$('settings').hidden};"
         + "$('about-button').onclick=()=>{$('about').hidden=false};$('about-close').onclick=()=>{$('about').hidden=true};"
+        + "$('license-button').onclick=async()=>{$('about').hidden=true;$('license-dialog').hidden=false;"
+        + "if(!licenseLoaded){const content=$('license-content');content.textContent='Loading license…';try{const r=await fetch('/license.txt',"
+        + "{mode:'same-origin',credentials:'omit',cache:'no-store'});if(!r.ok)throw Error();content.textContent=await r.text();licenseLoaded=true}"
+        + "catch(e){content.textContent='The bundled project license is unavailable.'}}$('license-content').focus()};"
+        + "$('license-back').onclick=()=>{$('license-dialog').hidden=true;$('about').hidden=false;$('license-button').focus()};"
+        + "$('license-close').onclick=()=>{$('license-dialog').hidden=true;$('about').hidden=true;$('about-button').focus()};"
+        + "window.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('license-dialog').hidden)$('license-close').click()});"
         + "$('clear').onclick=()=>{token='';$('token').value='';form.hidden=true;result.textContent='Token forgotten from memory.'};"
         + "async function api(path,method='GET',body){const r=await fetch(path,{method,mode:'same-origin',credentials:'omit',cache:'no-store',headers:{'Authorization':'Bearer '+token,...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},body});"
         + "const data=await r.json();if(!r.ok)throw Error(data.error||('HTTP '+r.status));return data}"
@@ -216,7 +232,9 @@ public final class SnapshotHttpServer {
         + "row.className='telemetry-row';name.className='telemetry-label';name.textContent=label+':';text.className='telemetry-value';text.textContent=String(value);"
         + "row.append(name,text);group.append(row)}"
         + "function telemetryGroup(panel,title,entries){const group=document.createElement('section'),heading=document.createElement('h2');"
-        + "group.className='telemetry-group';heading.textContent=title;group.append(heading);for(const entry of entries)telemetryRow(group,entry[0],entry[1]);panel.append(group)}"
+        + "group.className='telemetry-group';heading.textContent=title;group.append(heading);for(const entry of entries)telemetryRow(group,entry[0],entry[1]);panel.append(group);return group}"
+        + "function telemetrySubgroup(group,title,entries){const subsection=document.createElement('section'),heading=document.createElement('h3');"
+        + "subsection.className='telemetry-subgroup';heading.textContent=title;subsection.append(heading);for(const entry of entries)telemetryRow(subsection,entry[0],entry[1]);group.append(subsection)}"
         + "function layoutTelemetryRows(){const panel=$('telemetry');if(panel.hidden)return;for(const row of panel.querySelectorAll('.telemetry-row')){"
         + "row.classList.remove('stacked');const name=row.querySelector('.telemetry-label'),value=row.querySelector('.telemetry-value');"
         + "const gap=parseFloat(getComputedStyle(row).columnGap)||0,nameWidth=Math.max(name.getBoundingClientRect().width,name.scrollWidth);"
@@ -229,11 +247,23 @@ public final class SnapshotHttpServer {
         + "$('viewer').dataset.telemetryPosition=d.telemetry_position;panel.style.fontSize=d.panel_text_size+'px';panel.replaceChildren();"
         + "if(d.panel_environment)telemetryGroup(panel,'Environment',[['Temperature',d.environment_temperature_c+' C'],['Humidity',d.environment_humidity_pct+' %'],"
         + "['Pressure',d.environment_pressure_hpa+' hPa'],['Sensor',d.environment_state]]);"
-        + "if(d.panel_device)telemetryGroup(panel,'Device',[['Battery level',d.battery_percent+' %'],['Battery temperature',d.battery_temperature_c+' C'],"
-        + "['Charging status',d.charging],['Thermal status',d.thermal_status]]);"
-        + "if(d.panel_capture)telemetryGroup(panel,'Capture',[['Capture state',d.capture_state],['HTTP server',d.http_server_state],"
-        + "['Latest image age',d.latest_image_age_seconds+' s'],['FPS',d.actual_fps+' / '+d.requested_fps],"
-        + "['Processing ms last/average/maximum',d.processing_last_ms+' / '+d.processing_average_ms+' / '+d.processing_maximum_ms]]);"
+        + "if(d.panel_device){const device=telemetryGroup(panel,'Device',[['Battery level',d.battery_percent+' %'],"
+        + "['Battery temperature',d.battery_temperature_c+' C'],['Charging status',d.charging],['Thermal status',d.thermal_status]]);"
+        + "telemetrySubgroup(device,'Application',[['Current CPU (% of one core)',d.app_cpu_current_percent],"
+        + "['Recent CPU average (% of one core; up to 10 min)',d.app_cpu_recent_average_percent],['Current process PSS (KB)',d.app_pss_kb],"
+        + "['Observed PSS peak (KB)',d.app_pss_peak_kb],['Process uptime',d.app_uptime]]);"
+        + "telemetrySubgroup(device,'System',[['Available RAM (KB)',d.system_available_ram_kb],['Total RAM (KB)',d.system_total_ram_kb],"
+        + "['Android low-memory status',d.system_low_memory]])}"
+        + "if(d.panel_capture){const stopped=d.capture_state==='stopped',stats=d.capture_frames>0;"
+        + "const label=stopped&&stats?'Frame processing (ms; last-session statistics)':'Frame processing (ms; last/average/maximum)';"
+        + "telemetryGroup(panel,'Capture',[['Capture state',stopped?'Not capturing':d.capture_state],['Latest image age',d.latest_image_age_seconds+' s'],"
+        + "['Capture FPS actual/requested (last session when stopped)',d.actual_fps+' / '+d.requested_fps],"
+        + "[label,d.processing_last_ms+' / '+d.processing_average_ms+' / '+d.processing_maximum_ms]])}"
+        + "if(d.panel_server){const server=telemetryGroup(panel,'Server',[['Service state',d.server_service_state],"
+        + "['Requested listeners',d.server_requested_listeners],['Effective listeners',d.server_effective_listeners],"
+        + "['Listener errors',d.server_listener_error],['Active connections',d.server_active_connections],"
+        + "['Active MJPEG streaming clients',d.server_active_streams]]);const note=document.createElement('p');"
+        + "note.className='telemetry-note';note.textContent='Streaming clients are active stream connections, not unique people or IP addresses. Active connections may include transient telemetry polls and viewer requests; listener sockets are excluded.';server.append(note)}"
         + "requestAnimationFrame(layoutTelemetryRows)}catch(e){panel.hidden=false;panel.textContent='Telemetry unavailable'}}"
         + "updateTelemetry();setInterval(updateTelemetry,2000)})()</script></body></html>\n";
 
@@ -256,13 +286,21 @@ public final class SnapshotHttpServer {
             this.body = body.getBytes(StandardCharsets.UTF_8);
         }
     }
+    static final class Counters {
+        final AtomicInteger activeConnections = new AtomicInteger();
+        final AtomicInteger activeStreams = new AtomicInteger();
+        volatile String listenerError;
+    }
+
     private final File snapshot;
     private final List<ListenerSpec> listenerSpecs;
     private final String certificatePem;
+    private final String projectLicense;
     private final Consumer<String> log;
     private final AdminTokenStore tokenStore;
     private final AdminApi adminApi;
     private final PublicTelemetryApi telemetryApi;
+    private final Counters counters;
     private final Object lock = new Object();
     private Session session;
     private volatile Runnable onTerminated;
@@ -285,26 +323,48 @@ public final class SnapshotHttpServer {
 
     public SnapshotHttpServer(File snapshot, int port, Consumer<String> log, AdminTokenStore tokenStore,
                               AdminApi adminApi, PublicTelemetryApi telemetryApi) {
+        this(snapshot, port, log, tokenStore, adminApi, telemetryApi, null);
+    }
+
+    public SnapshotHttpServer(File snapshot, int port, Consumer<String> log, AdminTokenStore tokenStore,
+                              AdminApi adminApi, PublicTelemetryApi telemetryApi, String projectLicense) {
         this(snapshot, Collections.singletonList(new ListenerSpec(false, "0.0.0.0", port, null)),
-            null, log, tokenStore, adminApi, telemetryApi);
+            null, log, tokenStore, adminApi, telemetryApi, projectLicense, new Counters());
     }
 
     public SnapshotHttpServer(File snapshot, CaptureConfig config, SSLContext tlsContext, String certificatePem,
                               Consumer<String> log, AdminTokenStore tokenStore, AdminApi adminApi,
                               PublicTelemetryApi telemetryApi) {
-        this(snapshot, listenerSpecs(config, tlsContext), certificatePem, log, tokenStore, adminApi, telemetryApi);
+        this(snapshot, config, tlsContext, certificatePem, log, tokenStore, adminApi, telemetryApi, null);
+    }
+
+    public SnapshotHttpServer(File snapshot, CaptureConfig config, SSLContext tlsContext, String certificatePem,
+                              Consumer<String> log, AdminTokenStore tokenStore, AdminApi adminApi,
+                              PublicTelemetryApi telemetryApi, String projectLicense) {
+        this(snapshot, config, tlsContext, certificatePem, log, tokenStore, adminApi, telemetryApi,
+            projectLicense, new Counters());
+    }
+
+    SnapshotHttpServer(File snapshot, CaptureConfig config, SSLContext tlsContext, String certificatePem,
+                       Consumer<String> log, AdminTokenStore tokenStore, AdminApi adminApi,
+                       PublicTelemetryApi telemetryApi, String projectLicense, Counters counters) {
+        this(snapshot, listenerSpecs(config, tlsContext), certificatePem, log, tokenStore, adminApi,
+            telemetryApi, projectLicense, counters);
     }
 
     private SnapshotHttpServer(File snapshot, List<ListenerSpec> listenerSpecs, String certificatePem,
                                Consumer<String> log, AdminTokenStore tokenStore,
-                               AdminApi adminApi, PublicTelemetryApi telemetryApi) {
+                               AdminApi adminApi, PublicTelemetryApi telemetryApi, String projectLicense,
+                               Counters counters) {
         this.snapshot = snapshot;
         this.listenerSpecs = listenerSpecs;
         this.certificatePem = certificatePem;
+        this.projectLicense = projectLicense;
         this.log = log;
         this.tokenStore = tokenStore;
         this.adminApi = adminApi;
         this.telemetryApi = telemetryApi;
+        this.counters = counters == null ? new Counters() : counters;
     }
 
     private static List<ListenerSpec> listenerSpecs(CaptureConfig config, SSLContext tlsContext) {
@@ -410,6 +470,17 @@ public final class SnapshotHttpServer {
         }
     }
 
+    public int getActiveConnections() { return counters.activeConnections.get(); }
+    public int getActiveStreams() { return counters.activeStreams.get(); }
+
+    private static boolean reserveSlot(AtomicInteger counter, int limit) {
+        while (true) {
+            int current = counter.get();
+            if (current >= limit) return false;
+            if (counter.compareAndSet(current, current + 1)) return true;
+        }
+    }
+
     private static void closeQuietly(java.io.Closeable closeable) {
         if (closeable == null) return;
         try { closeable.close(); } catch (IOException ignored) { }
@@ -434,6 +505,7 @@ public final class SnapshotHttpServer {
         final List<Thread> acceptors = new ArrayList<>();
         final Thread watchdog;
         final Set<Conn> conns = ConcurrentHashMap.newKeySet();
+        final AtomicInteger activeConnections = new AtomicInteger();
         final AtomicInteger streams = new AtomicInteger();
         final int connLimit, streamLimit;
         final long idleMillis, writeMillis;
@@ -492,23 +564,28 @@ public final class SnapshotHttpServer {
                         client = listener.accept();
                     } catch (IOException e) {
                         if (closing || listener.isClosed()) break;
+                        counters.listenerError = "listener-accept-error";
                         log.accept("Accept error: " + e);
                         continue;
                     }
                     if (closing) { closeQuietly(client); break; }
-                    if (conns.size() >= connLimit) {
+                    if (!reserveSlot(activeConnections, connLimit)) {
                         if (!(client instanceof SSLSocket)) {
                             try { rejectBusy(client); } catch (IOException | RuntimeException ignored) { }
                         }
                         closeQuietly(client);
                         continue;
                     }
-                    Conn conn = new Conn(client);
-                    conns.add(conn);
+                    counters.activeConnections.incrementAndGet();
+                    Conn conn = null;
                     try {
+                        conn = new Conn(client);
+                        conns.add(conn);
                         conn.thread.start();
                     } catch (Throwable t) {
-                        conns.remove(conn);
+                        if (conn != null) conns.remove(conn);
+                        activeConnections.decrementAndGet();
+                        counters.activeConnections.decrementAndGet();
                         closeQuietly(client);
                     }
                     if (closing) closeQuietly(client);
@@ -517,6 +594,7 @@ public final class SnapshotHttpServer {
                 closeQuietly(listener);
                 boolean deliberate = closing;
                 if (!deliberate) {
+                    counters.listenerError = "listener-thread-ended-unexpectedly";
                     shutdown();
                     Runnable callback = onTerminated;
                     if (callback != null) callback.run();
@@ -575,6 +653,8 @@ public final class SnapshotHttpServer {
                 } finally {
                     closeQuietly(socket);
                     conns.remove(this);
+                    activeConnections.decrementAndGet();
+                    counters.activeConnections.decrementAndGet();
                 }
             }
 
@@ -665,6 +745,8 @@ public final class SnapshotHttpServer {
             }
             if (path.equals("/snapshot.jpg")) {
                 serveSnapshot(conn, output, head, parts[0]);
+            } else if (path.equals("/license.txt") && projectLicense != null) {
+                reply(conn, output, 200, "OK", "text/plain; charset=utf-8", bytes(projectLicense), head);
             } else if (path.equals("/server-certificate.pem") && certificatePem != null) {
                 reply(conn, output, 200, "OK", "application/x-pem-file", bytes(certificatePem), head);
             } else if (path.equals("/")) {
@@ -843,11 +925,11 @@ public final class SnapshotHttpServer {
                 conn.write(output, headers.getBytes(StandardCharsets.US_ASCII));
                 return;
             }
-            if (streams.incrementAndGet() > streamLimit) {
-                streams.decrementAndGet();
+            if (!reserveSlot(streams, streamLimit)) {
                 rejectBusy(conn.socket);
                 return;
             }
+            counters.activeStreams.incrementAndGet();
             try {
                 log.accept("Stream client connected: " + conn.socket.getRemoteSocketAddress());
                 conn.write(output, headers.getBytes(StandardCharsets.US_ASCII));
@@ -881,6 +963,7 @@ public final class SnapshotHttpServer {
                 }
             } finally {
                 streams.decrementAndGet();
+                counters.activeStreams.decrementAndGet();
                 log.accept("Stream client finished");
             }
         }

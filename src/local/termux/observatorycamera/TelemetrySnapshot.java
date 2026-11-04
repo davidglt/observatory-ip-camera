@@ -25,11 +25,14 @@ final class TelemetrySnapshot {
     final Double processingLastMs;
     final Double processingAverageMs;
     final Double processingMaximumMs;
+    final ProcessMetrics.Snapshot processMetrics;
+    final SnapshotHttpService.Telemetry serverTelemetry;
     final CaptureConfig config;
     final OverlayTelemetry overlayTelemetry;
 
     private TelemetrySnapshot(String environmentState, EnvironmentalTelemetry.Reading environment,
-                              DeviceTelemetry device, ContinuousStatus capture, String serverState,
+                              DeviceTelemetry device, ContinuousStatus capture, ProcessMetrics.Snapshot processMetrics,
+                              SnapshotHttpService.Telemetry serverTelemetry, String serverState,
                               Double imageAgeSeconds, CaptureConfig config) {
         this.environmentState = environmentState;
         this.environment = environment;
@@ -46,6 +49,8 @@ final class TelemetrySnapshot {
         processingLastMs = capture.procLastNanos > 0 ? capture.procLastNanos / 1_000_000.0 : null;
         processingAverageMs = capture.frames > 0 ? capture.procAvgNanos / 1_000_000.0 : null;
         processingMaximumMs = capture.frames > 0 ? capture.procMaxNanos / 1_000_000.0 : null;
+        this.processMetrics = processMetrics;
+        this.serverTelemetry = serverTelemetry;
         this.config = config;
         overlayTelemetry = new OverlayTelemetry(environment, batteryPercent, batteryTemperatureC, charging, thermalStatus);
     }
@@ -59,11 +64,14 @@ final class TelemetrySnapshot {
         String envState = sensor.state(wall, TelemetryRuntime.staleMillis());
         if (!envState.equals("fresh")) reading = null;
         ContinuousStatus capture = ContinuousCaptureService.getStatus();
+        ProcessMetrics.Snapshot processMetrics = TelemetryRuntime.processMetrics();
+        SnapshotHttpService.Telemetry serverTelemetry = SnapshotHttpService.telemetry(config);
         java.io.File snapshot = new java.io.File(context.getFilesDir(), "snapshot.jpg");
         Double age = ImageAge.seconds(snapshot.isFile() ? snapshot.lastModified() : 0, wall);
         String server = SnapshotHttpService.isRunning() ? "running"
             : SnapshotHttpService.getLastError() == null ? "stopped" : "error";
-        return new TelemetrySnapshot(envState, reading, DeviceTelemetry.read(context), capture, server, age, config);
+        return new TelemetrySnapshot(envState, reading, DeviceTelemetry.read(context), capture,
+            processMetrics, serverTelemetry, server, age, config);
     }
 
     String toJson() {
@@ -84,6 +92,27 @@ final class TelemetrySnapshot {
         add(json, "processing_last_ms", processingLastMs == null ? "--" : fixed(processingLastMs, 1));
         add(json, "processing_average_ms", processingAverageMs == null ? "--" : fixed(processingAverageMs, 1));
         add(json, "processing_maximum_ms", processingMaximumMs == null ? "--" : fixed(processingMaximumMs, 1));
+        add(json, "capture_frames", Long.toString(ContinuousCaptureService.getStatus().frames), false);
+        add(json, "process_metrics_state", processMetricsState());
+        add(json, "app_cpu_current_percent", processValue(processMetrics.latest == null
+            ? null : processMetrics.latest.cpuPercent, processMetrics.sampleCount < 2, 2, " %"));
+        add(json, "app_cpu_recent_average_percent", processValue(processMetrics.recentAverageCpuPercent,
+            processMetrics.sampleCount < 2, 2, " %"));
+        add(json, "app_pss_kb", processValue(processMetrics.latest == null
+            ? null : processMetrics.latest.pssKb, false, 0, ""));
+        add(json, "app_pss_peak_kb", processValue(processMetrics.observedPeakPssKb, false, 0, ""));
+        add(json, "app_uptime", uptimeValue());
+        add(json, "system_available_ram_kb", processValue(processMetrics.latest == null
+            ? null : processMetrics.latest.availableRamKb, false, 0, ""));
+        add(json, "system_total_ram_kb", processValue(processMetrics.latest == null
+            ? null : processMetrics.latest.totalRamKb, false, 0, ""));
+        add(json, "system_low_memory", lowMemoryValue());
+        add(json, "server_service_state", serverTelemetry.state);
+        add(json, "server_requested_listeners", serverTelemetry.requestedListeners);
+        add(json, "server_effective_listeners", serverTelemetry.effectiveListeners);
+        add(json, "server_listener_error", serverTelemetry.listenerError);
+        add(json, "server_active_connections", Integer.toString(serverTelemetry.activeConnections));
+        add(json, "server_active_streams", Integer.toString(serverTelemetry.activeStreams));
         add(json, "panel_enabled", config.panelEnabled ? "true" : "false", false);
         add(json, "telemetry_position", config.telemetryPosition);
         add(json, "panel_text_color", config.panelTextColor);
@@ -92,6 +121,7 @@ final class TelemetrySnapshot {
         add(json, "panel_environment", config.panelEnvironment ? "true" : "false", false);
         add(json, "panel_device", config.panelDevice ? "true" : "false", false);
         add(json, "panel_capture", config.panelCapture ? "true" : "false", false);
+        add(json, "panel_server", config.panelServer ? "true" : "false", false);
         return json.append('}').toString();
     }
 
@@ -110,19 +140,73 @@ final class TelemetrySnapshot {
             lines.add("Battery temperature: " + (batteryTemperatureC == null ? "--" : fixed(batteryTemperatureC, 1) + " C"));
             lines.add("Charging status: " + charging);
             lines.add("Thermal status: " + thermalStatus);
+            lines.add("Application");
+            lines.add("CPU current (% of one core): " + processValue(processMetrics.latest == null
+                ? null : processMetrics.latest.cpuPercent, processMetrics.sampleCount < 2, 2, " %"));
+            lines.add("CPU recent average (% of one core): " + processValue(processMetrics.recentAverageCpuPercent,
+                processMetrics.sampleCount < 2, 2, " %"));
+            lines.add("Current process PSS: " + processValue(processMetrics.latest == null
+                ? null : processMetrics.latest.pssKb, false, 0, " KB"));
+            lines.add("Observed PSS peak: " + processValue(processMetrics.observedPeakPssKb, false, 0, " KB"));
+            lines.add("Process uptime: " + uptimeValue());
+            lines.add("System");
+            lines.add("Available RAM: " + processValue(processMetrics.latest == null
+                ? null : processMetrics.latest.availableRamKb, false, 0, " KB"));
+            lines.add("Total RAM: " + processValue(processMetrics.latest == null
+                ? null : processMetrics.latest.totalRamKb, false, 0, " KB"));
+            lines.add("Android low-memory status: " + lowMemoryValue());
         }
         if (config.panelCapture) {
             lines.add("Capture");
-            lines.add("Capture state: " + captureState);
-            lines.add("HTTP server: " + httpServerState);
+            lines.add("Capture state: " + (captureState.equals(ContinuousStatus.STOPPED) ? "Not capturing" : captureState));
             lines.add("Latest image age: " + (imageAgeSeconds == null ? "--" : fixed(imageAgeSeconds, 1) + " s"));
             lines.add("FPS actual/requested: " + (actualFps == null ? "--" : fixed(actualFps, 2)) + " / "
                 + (requestedFps == null ? "--" : fixed(requestedFps, 1)));
-            lines.add("Processing ms last/average/maximum: " + value(processingLastMs) + " / "
+            lines.add("Frame processing (ms; last-session statistics when stopped): " + value(processingLastMs) + " / "
                 + value(processingAverageMs) + " / " + value(processingMaximumMs));
+        }
+        if (config.panelServer) {
+            lines.add("Server");
+            lines.add("Service state: " + serverTelemetry.state);
+            lines.add("Requested listeners: " + serverTelemetry.requestedListeners);
+            lines.add("Effective listeners: " + serverTelemetry.effectiveListeners);
+            lines.add("Listener errors: " + serverTelemetry.listenerError);
+            lines.add("Active connections: " + serverTelemetry.activeConnections);
+            lines.add("Active MJPEG streaming clients: " + serverTelemetry.activeStreams);
         }
         return lines;
     }
+
+    private String processMetricsState() {
+        if (processMetrics.latest == null) return "Collecting";
+        if (processMetrics.isStale()) return "stale";
+        ProcessMetrics.Sample latest = processMetrics.latest;
+        return latest.cpuPercent != null || latest.pssKb != null || latest.availableRamKb != null
+            || latest.totalRamKb != null || latest.lowMemory != null ? "available" : "unavailable";
+    }
+
+    private String processValue(Number value, boolean collecting, int digits, String unit) {
+        if (processMetrics.latest == null) return "Collecting";
+        if (value == null) return collecting ? "Collecting" : "Unavailable";
+        String text = digits == 0 ? Long.toString(value.longValue()) : fixed(value.doubleValue(), digits);
+        return text + unit + staleSuffix();
+    }
+
+    private String uptimeValue() {
+        if (processMetrics.latest == null) return "Collecting";
+        Long millis = processMetrics.latest.uptimeMillis;
+        if (millis == null) return "Unavailable";
+        long seconds = millis / 1000;
+        return seconds / 3600 + " h " + seconds / 60 % 60 + " min " + seconds % 60 + " s" + staleSuffix();
+    }
+
+    private String lowMemoryValue() {
+        if (processMetrics.latest == null) return "Collecting";
+        Boolean low = processMetrics.latest.lowMemory;
+        return low == null ? "Unavailable" : (low ? "Low" : "Normal") + staleSuffix();
+    }
+
+    private String staleSuffix() { return processMetrics.isStale() ? " (stale)" : ""; }
 
     private static String value(Double n) { return n == null ? "--" : fixed(n, 1); }
     private static String fixed(double value, int digits) { return String.format(Locale.ROOT, "%." + digits + "f", value); }

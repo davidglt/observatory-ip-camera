@@ -61,13 +61,14 @@ else
 fi
 keytool -list -keystore "$KEY" -storepass:file "$PASS" -alias app >/dev/null
 rm -rf build
-mkdir -p build/classes build/dex dist
+mkdir -p build/classes build/dex build/assets dist
+cp LICENSE build/assets/LICENSE
 rm -f dist/observatory-ip-camera.apk
 find src -name '*.java' -print > build/sources.txt
 javac -encoding UTF-8 --release 8 -classpath "$PLATFORM:$MQTT_CLASSPATH" -d build/classes @build/sources.txt
 jar cf build/classes.jar -C build/classes .
 d8 --lib "$PLATFORM" --min-api 30 --output build/dex build/classes.jar "${MQTT_JARS[@]}"
-aapt2 link -o build/base.apk -I "$PLATFORM" --manifest AndroidManifest.xml
+aapt2 link -o build/base.apk -I "$PLATFORM" -A build/assets --manifest AndroidManifest.xml
 cp build/base.apk build/unsigned.apk
 (cd build/dex && zip -q ../unsigned.apk classes.dex)
 zipalign -f 4 build/unsigned.apk build/aligned.apk

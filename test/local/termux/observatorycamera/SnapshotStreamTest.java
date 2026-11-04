@@ -114,6 +114,16 @@ public final class SnapshotStreamTest {
         return new String(response, 0, Math.min(response.length, 40), StandardCharsets.US_ASCII);
     }
 
+    private static void awaitCounts(SnapshotHttpServer server, int connections, int streams) throws Exception {
+        long deadline = System.nanoTime() + 3_000_000_000L;
+        while (System.nanoTime() < deadline) {
+            if (server.getActiveConnections() == connections && server.getActiveStreams() == streams) return;
+            Thread.sleep(10);
+        }
+        throw new AssertionError("active counts expected " + connections + "/" + streams + " but was "
+            + server.getActiveConnections() + "/" + server.getActiveStreams());
+    }
+
     public static void main(String[] args) throws Exception {
         File dir = Files.createTempDirectory("stream-test").toFile();
         File image = new File(dir, "snapshot.jpg");
@@ -133,6 +143,7 @@ public final class SnapshotStreamTest {
             InputStream in = stream.getInputStream();
             String headers = readHeaders(in);
             check(headers.startsWith("HTTP/1.1 200 OK"), "stream 200");
+            awaitCounts(server, 1, 1);
             check(headers.contains("Content-Type: multipart/x-mixed-replace; boundary=" + SnapshotHttpServer.BOUNDARY), "multipart content type");
             check(headers.contains("Cache-Control: no-store, no-cache"), "no-cache header");
             check(headers.contains("Pragma: no-cache"), "pragma header");
@@ -151,15 +162,18 @@ public final class SnapshotStreamTest {
             check(readFrame(in) == null, "closing boundary after idle");
             check(closed(stream), "socket closed after idle end");
             stream.close();
+            awaitCounts(server, 0, 0);
 
             // Concurrent snapshot clients while streams and stalled readers occupy slots.
             Socket s1 = open(port, "GET", "/stream.mjpg"), s2 = open(port, "GET", "/stream.mjpg");
             sockets.add(s1); sockets.add(s2);
             readHeaders(s1.getInputStream());
             readHeaders(s2.getInputStream());
+            awaitCounts(server, 2, 2);
             Socket s3 = open(port, "GET", "/stream.mjpg");
             sockets.add(s3);
             check(status(readAll(s3)).contains("503"), "third stream rejected at the stream limit");
+            awaitCounts(server, 2, 2);
             s3.close();
             for (int i = 0; i < 4; i++) {
                 byte[] resp = readAll(open(port, "GET", "/snapshot.jpg"));
@@ -204,7 +218,7 @@ public final class SnapshotStreamTest {
             check(Arrays.equals(readFrame(s1.getInputStream()), first) && Arrays.equals(readFrame(s2.getInputStream()), first), "both streams get the frame");
             // Client disconnect frees its slot.
             s1.close();
-            Thread.sleep(300);
+            awaitCounts(server, 1, 1);
             publish(dir, second);
             check(Arrays.equals(readFrame(s2.getInputStream()), second), "remaining stream continues");
             Socket again = open(port, "GET", "/stream.mjpg");
@@ -212,6 +226,7 @@ public final class SnapshotStreamTest {
             check(readHeaders(again.getInputStream()).startsWith("HTTP/1.1 200"), "slot reusable after disconnect");
             again.close();
             s2.close();
+            awaitCounts(server, 0, 0);
 
             // Connection cap: stalled header-less sockets fill all slots; extra connection gets 503 or is closed.
             List<Socket> idle = new ArrayList<>();
@@ -261,6 +276,7 @@ public final class SnapshotStreamTest {
             } catch (IOException reset) { }
             check(drained < big.length, "slow client was cut off before the whole frame");
             slow.close();
+            awaitCounts(server, 0, 0);
 
             // Stop with open streams and restart leaves no listener, threads or stale state.
             Socket live = open(port, "GET", "/stream.mjpg");
@@ -270,6 +286,7 @@ public final class SnapshotStreamTest {
             server.stop();
             check((System.nanoTime() - begin) < 2500000000L, "stop returns promptly with an open stream");
             check(closed(live), "stream closed by stop");
+            awaitCounts(server, 0, 0);
             live.close();
             publish(dir, first);
             for (int i = 0; i < 3; i++) {
@@ -282,6 +299,7 @@ public final class SnapshotStreamTest {
                 check(decodes(readFrame(st.getInputStream())), "frame after restart " + i);
                 server.stop();
                 check(closed(st), "stream closed on stop " + i);
+                awaitCounts(server, 0, 0);
                 st.close();
             }
             int threads = 0;
