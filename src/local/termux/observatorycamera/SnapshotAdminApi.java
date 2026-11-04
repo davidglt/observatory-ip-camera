@@ -32,8 +32,11 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
                 try { values = decodeForm(body); }
                 catch (IllegalArgumentException | CharacterCodingException e) { return bad("invalid-form"); }
                 CameraCapabilities caps = cameraCapabilities();
-                ConfigStore.Outcome saved = CaptureSettings.store(context).updateEntries(values, caps::validate);
+                ConfigStore store = CaptureSettings.store(context);
+                CaptureConfig previous = store.load().config;
+                ConfigStore.Outcome saved = store.updateEntries(values, candidate -> validateCandidate(candidate, caps));
                 if (saved.config == null) return bad(saved.error);
+                if (networkChanged(previous, saved.config)) SnapshotHttpService.applyNetworkSettings(saved.config);
                 return ok(configJson(saved.config, null));
             }
             return new SnapshotHttpServer.ApiResult(404, "Not Found", "{\"error\":\"not-found\"}");
@@ -74,13 +77,51 @@ final class SnapshotAdminApi implements SnapshotHttpServer.AdminApi {
             .append(ContinuousCaptureService.effectiveControlRequest() == null ? "null" : ContinuousCaptureService.effectiveControlRequest())
             .append(",\"effective_image_transform\":")
             .append(ContinuousCaptureService.effectiveImageTransform() == null ? "null" : ContinuousCaptureService.effectiveImageTransform())
-            .append(",\"file_state\":\"").append(json(CaptureSettings.store(context).load().fileState)).append("\"");
+            .append(",\"file_state\":\"").append(json(CaptureSettings.store(context).load().fileState))
+            .append("\",\"network_interfaces\":").append(networkInterfacesJson())
+            .append(",\"network_status\":\"").append(json(SnapshotHttpService.networkStatus(config)))
+            .append("\",\"network_apply_error\":\"")
+            .append(json(SnapshotHttpService.getNetworkError() == null ? "" : SnapshotHttpService.getNetworkError())).append('"');
         if (error != null) out.append(",\"error\":\"").append(json(error)).append('"');
         return out.append('}').toString();
     }
 
     private CameraCapabilities cameraCapabilities() throws android.hardware.camera2.CameraAccessException {
         return CameraCapabilityReader.read(context);
+    }
+
+    private String validateCandidate(CaptureConfig config, CameraCapabilities capabilities) {
+        String error = capabilities.validate(config);
+        if (error != null) return error;
+        if (config.httpsEnabled) {
+            try { TlsCertificateStore.load(context.getFilesDir()); }
+            catch (Exception e) {
+                String message = e.getMessage();
+                return message != null && message.matches("https-[A-Za-z0-9-]+")
+                    ? message : "https-certificate-invalid";
+            }
+        }
+        return null;
+    }
+
+    private boolean networkChanged(CaptureConfig first, CaptureConfig second) {
+        return first.httpEnabled != second.httpEnabled || first.httpPort != second.httpPort
+            || first.httpsEnabled != second.httpsEnabled || first.httpsPort != second.httpsPort
+            || !first.listenAddresses.equals(second.listenAddresses);
+    }
+
+    private String networkInterfacesJson() {
+        StringBuilder json = new StringBuilder("[");
+        try {
+            boolean first = true;
+            for (NetworkInterfaceDiscovery.Address address : NetworkInterfaceDiscovery.discover()) {
+                if (!first) json.append(',');
+                first = false;
+                json.append("{\"address\":\"").append(json(address.value)).append("\",\"name\":\"")
+                    .append(json(address.interfaceName)).append("\"}");
+            }
+        } catch (Exception ignored) { }
+        return json.append(']').toString();
     }
 
     private String capabilitiesJson(CameraCapabilities capabilities) {

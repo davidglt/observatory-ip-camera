@@ -97,6 +97,12 @@ public final class ControlActivity extends Activity {
             case ControlCommand.CONFIG_RESET: configReset(command); break;
             case ControlCommand.CONFIG_EXPORT: configOutcome(command, CaptureSettings.store(this).materialize()); break;
             case ControlCommand.CONFIG_IMPORT: configOutcome(command, CaptureSettings.store(this).importPending(this::validateConfig)); break;
+            case ControlCommand.CONFIG_VALIDATE: configValidate(command, false); break;
+            case ControlCommand.CONFIG_RELOAD: configValidate(command, true); break;
+            case ControlCommand.NETWORK_APPLY: networkApply(command); break;
+            case ControlCommand.CERTIFICATE_IMPORT: certificateImport(command); break;
+            case ControlCommand.CERTIFICATE_STATUS: certificateStatus(command); break;
+            case ControlCommand.CERTIFICATE_EXPORT: certificateExport(command); break;
             case ControlCommand.ADMIN_TOKEN_SHOW: adminToken(command, false); break;
             case ControlCommand.ADMIN_TOKEN_ROTATE: adminToken(command, true); break;
             default: status(command);
@@ -184,7 +190,8 @@ public final class ControlActivity extends Activity {
     private void configShow(ControlCommand command) {
         ConfigStore.Loaded loaded = CaptureSettings.store(this).load();
         Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", loaded.config.describe()
-            + " file=" + loaded.fileState + (loaded.error == null ? "" : " fileError=" + loaded.error)));
+            + " file=" + loaded.fileState + " " + SnapshotHttpService.networkStatus(loaded.config)
+            + (loaded.error == null ? "" : " fileError=" + loaded.error)));
     }
 
     private void configSet(ControlCommand command) { configOutcome(command, CaptureSettings.store(this).update(command.config, this::validateConfig)); }
@@ -197,11 +204,95 @@ public final class ControlActivity extends Activity {
             Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=" + outcome.error));
             return;
         }
-        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config", "saved=true effect=next-frame-or-session"));
+        String applyError = SnapshotHttpService.applyNetworkSettings(outcome.config);
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "config",
+            "saved=true effect=next-frame-or-session network=" + (applyError == null ? "applied-or-pending" : "not-applied")
+                + (applyError == null ? "" : " networkError=" + applyError)));
+    }
+
+    private void configValidate(ControlCommand command, boolean reload) {
+        ConfigStore.Loaded loaded = CaptureSettings.store(this).load();
+        if (loaded.fileState.equals("corrupt")) {
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed",
+                "reason=invalid-properties-file:" + loaded.error));
+            return;
+        }
+        String validation = validateConfig(loaded.config);
+        if (validation != null) {
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=" + validation));
+            return;
+        }
+        if (!reload) {
+            Log.i(TAG, ControlCommand.line(command.requestId, command.name, "valid",
+                "file=" + loaded.fileState + " settings=" + loaded.config.describe()));
+            return;
+        }
+        TelemetryRuntime.refresh(this);
+        String applyError = SnapshotHttpService.applyNetworkSettings(loaded.config);
+        if (applyError != null) {
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed",
+                "reason=network-not-applied:" + applyError));
+            return;
+        }
+        Log.i(TAG, ControlCommand.line(command.requestId, command.name, "reloaded",
+            "file=" + loaded.fileState + " network=" + SnapshotHttpService.networkStatus(loaded.config)));
+    }
+
+    private void networkApply(ControlCommand command) {
+        configValidate(command, true);
+    }
+
+    private void certificateImport(ControlCommand command) {
+        ConfigStore.Loaded loaded = CaptureSettings.store(this).load();
+        if (loaded.fileState.equals("corrupt")) {
+            TlsCertificateStore.discardPending(getFilesDir());
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=invalid-properties-file"));
+            return;
+        }
+        if (loaded.config.httpsEnabled && SnapshotHttpService.isRunning()) {
+            TlsCertificateStore.discardPending(getFilesDir());
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed",
+                "reason=stop-HTTPS-listener-before-certificate-import"));
+            return;
+        }
+        try {
+            TlsCertificateStore.Identity identity = TlsCertificateStore.importPending(getFilesDir());
+            Log.i(TAG, ControlCommand.line(command.requestId, command.name, "imported",
+                "sha256=" + identity.fingerprint + " expires=" + identity.expiresAt));
+        } catch (Exception e) {
+            TlsCertificateStore.discardPending(getFilesDir());
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=certificate-import-invalid"));
+        }
+    }
+
+    private void certificateStatus(ControlCommand command) {
+        try {
+            TlsCertificateStore.Identity identity = TlsCertificateStore.load(getFilesDir());
+            Log.i(TAG, ControlCommand.line(command.requestId, command.name, "ready",
+                "sha256=" + identity.fingerprint + " expires=" + identity.expiresAt));
+        } catch (Exception e) {
+            Log.i(TAG, ControlCommand.line(command.requestId, command.name, "missing", "reason=certificate-unavailable"));
+        }
+    }
+
+    private void certificateExport(ControlCommand command) {
+        try {
+            TlsCertificateStore.Identity identity = TlsCertificateStore.load(getFilesDir());
+            TlsCertificateStore.writePublicCertificate(getFilesDir(), identity);
+            Log.i(TAG, ControlCommand.line(command.requestId, command.name, "exported",
+                "file=" + TlsCertificateStore.PUBLIC_CERTIFICATE_FILE + " sha256=" + identity.fingerprint));
+        } catch (Exception e) {
+            Log.e(TAG, ControlCommand.line(command.requestId, command.name, "failed", "reason=certificate-export-failed"));
+        }
     }
 
     private String validateConfig(CaptureConfig config) {
-        try { return CameraCapabilityReader.read(this).validate(config); }
+        try {
+            String error = CameraCapabilityReader.read(this).validate(config);
+            if (error != null) return error;
+            if (config.httpsEnabled) TlsCertificateStore.load(getFilesDir());
+            return null;
+        }
         catch (Exception e) { return "camera-capability-unavailable"; }
     }
 
@@ -225,7 +316,8 @@ public final class ControlActivity extends Activity {
 
     private void start(ControlCommand command) {
         if (SnapshotHttpService.isRunning()) {
-            Log.i(TAG, ControlCommand.line(command.requestId, command.name, "listening", "port=" + SnapshotHttpServer.DEFAULT_PORT + " already=true"));
+            Log.i(TAG, ControlCommand.line(command.requestId, command.name, "listening",
+                "endpoints=" + SnapshotHttpService.networkStatus(CaptureSettings.load(this)) + " already=true"));
             return;
         }
         String notifications = notificationState();
@@ -252,7 +344,8 @@ public final class ControlActivity extends Activity {
         String error = SnapshotHttpService.getLastError();
         boolean camera = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
         Log.i(TAG, ControlCommand.line(command.requestId, command.name, "status", "running=" + SnapshotHttpService.isRunning()
-            + " port=" + SnapshotHttpServer.DEFAULT_PORT + " camera=" + (camera ? "granted" : "denied")
+            + " endpoints=" + SnapshotHttpService.networkStatus(CaptureSettings.load(this)).replaceAll("[\\r\\n]", "-")
+            + " camera=" + (camera ? "granted" : "denied")
             + " notifications=" + notificationState() + (error == null ? "" : " lastError=" + error)));
     }
 }

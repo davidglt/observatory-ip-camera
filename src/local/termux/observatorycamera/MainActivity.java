@@ -93,7 +93,7 @@ public final class MainActivity extends Activity {
         stop.setOnClickListener(v -> stopServer());
         layout.addView(stop);
         TextView warning = new TextView(this);
-        warning.setText("HTTP port 8080 is plaintext. Viewer/snapshots are public; settings require the admin token. Trusted LAN only.");
+        warning.setText("HTTP is unencrypted when enabled. Viewer/snapshots/telemetry are public; the admin token is exposed to network observers over HTTP.");
         layout.addView(warning);
         setContentView(layout);
         updateServerStatus();
@@ -122,9 +122,10 @@ public final class MainActivity extends Activity {
 
     private void updateServerStatus() {
         String error = SnapshotHttpService.getLastError();
-        if (SnapshotHttpService.isRunning()) serverStatus.setText("HTTP server: running on port 8080.");
-        else if (error != null) serverStatus.setText("HTTP server: stopped. " + error);
-        else serverStatus.setText("HTTP server: stopped.");
+        String endpoints = SnapshotHttpService.networkStatus(CaptureSettings.load(this));
+        if (SnapshotHttpService.isRunning()) serverStatus.setText("Camera server: running. " + endpoints);
+        else if (error != null) serverStatus.setText("Camera server: stopped. " + error + " " + endpoints);
+        else serverStatus.setText("Camera server: stopped. " + endpoints);
     }
 
     private boolean notificationsAllowed() {

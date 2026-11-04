@@ -25,10 +25,14 @@ import java.nio.file.Files;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -124,10 +128,19 @@ public final class SnapshotHttpServer {
         + "<label class=\"check-row\">Use TLS <input name=\"mqtt_tls\" type=\"checkbox\"></label>"
         + "<label>Stale sensor threshold (seconds) <input name=\"mqtt_stale_seconds\" type=\"number\" min=\"10\" max=\"3600\"></label>"
         + "<p class=\"settings-help\">MQTT credentials are configured only in the private device file, never in browser settings or exports. Sensor data is marked stale after this threshold.</p></fieldset>"
+        + "<fieldset class=\"settings-section\"><legend>Network</legend>"
+        + "<label class=\"check-row\">Enable HTTP <input name=\"http_enabled\" type=\"checkbox\"></label>"
+        + "<label>HTTP port <input name=\"http_port\" type=\"number\" min=\"1\" max=\"65535\"></label>"
+        + "<label class=\"check-row\">Enable HTTPS <input name=\"https_enabled\" type=\"checkbox\"></label>"
+        + "<label>HTTPS port <input name=\"https_port\" type=\"number\" min=\"1\" max=\"65535\"></label>"
+        + "<fieldset class=\"settings-subgroup\"><legend>IPv4 listen addresses</legend><div id=\"network-addresses\"></div></fieldset>"
+        + "<a id=\"certificate-link\" hidden href=\"/server-certificate.pem\">Download public server certificate</a>"
+        + "<p class=\"settings-help\">Saving stages new listeners when possible; a bind failure leaves current listeners active and is shown below. If an address overlaps an active listener, stop the service and start it again to apply. Unavailable addresses stay selected and are never replaced with all interfaces. HTTP is unencrypted and exposes the admin token to network observers.</p>"
+        + "<pre id=\"network-status\" class=\"settings-help\"></pre></fieldset>"
         + "<button type=\"submit\">Save settings</button></form><pre id=\"result\" aria-live=\"polite\"></pre></section>"
         + "<main id=\"viewer\"><img src=\"/stream.mjpg\" alt=\"Live camera stream\"><aside id=\"telemetry\" aria-label=\"Camera telemetry\" hidden></aside></main>"
         + "<p>Settings require the device-admin token.</p>"
-        + "<script nonce=\"__NONCE__\">(()=>{let token='';const $=id=>document.getElementById(id),form=$('form'),result=$('result');"
+        + "<script nonce=\"__NONCE__\">(()=>{let token='',loadedNetwork='';const $=id=>document.getElementById(id),form=$('form'),result=$('result');"
         + "$('settings-button').onclick=()=>{$('settings').hidden=!$('settings').hidden};"
         + "$('clear').onclick=()=>{token='';$('token').value='';form.hidden=true;result.textContent='Token forgotten from memory.'};"
         + "async function api(path,method='GET',body){const r=await fetch(path,{method,mode:'same-origin',credentials:'omit',cache:'no-store',headers:{'Authorization':'Bearer '+token,...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},body});"
@@ -135,6 +148,14 @@ public final class SnapshotHttpServer {
         + "function setSettings(s){for(const e of form.elements)if(e.name&&s[e.name]!==undefined){if(e.type==='checkbox')e.checked=s[e.name]==='on';else e.value=s[e.name]}"
         + "for(const p of form.querySelectorAll('[data-color-picker]')){const f=form.elements[p.dataset.colorPicker];p.value=/^#[0-9a-fA-F]{6}$/.test(f.value)?f.value:'#00ff00'}"
         + "const visible=new Set(s.fields&&s.fields!=='none'?s.fields.split(','):[]);for(const e of form.querySelectorAll('input[name=visible_field]'))e.checked=visible.has(e.value);updateControlDependencies()}"
+        + "function renderNetwork(s,available){const root=$('network-addresses'),chosen=new Set((s.listen_addresses||'0.0.0.0').split(',')),entries=["
+        + "{address:'0.0.0.0',name:'all'},{address:'127.0.0.1',name:'loopback'},...available];const known=new Set(entries.map(x=>x.address));"
+        + "for(const address of chosen)if(!known.has(address))entries.push({address,name:'unavailable'});root.replaceChildren();"
+        + "for(const entry of entries){const label=document.createElement('label'),input=document.createElement('input');label.className='check-row';input.type='checkbox';input.name='network_address';input.value=entry.address;"
+        + "input.checked=chosen.has(entry.address);label.append(input,document.createTextNode(entry.address+' — '+entry.name));root.append(label);"
+        + "input.onchange=()=>{const all=root.querySelector('input[value=\"0.0.0.0\"]');if(input.value==='0.0.0.0'&&input.checked){for(const x of root.querySelectorAll('input[name=network_address]:not([value=\"0.0.0.0\"])'))x.checked=false}"
+        + "else if(input.checked)all.checked=false;const wildcard=all.checked;for(const x of root.querySelectorAll('input[name=network_address]:not([value=\"0.0.0.0\"])'))x.disabled=wildcard}}}"
+        + "const wildcard=root.querySelector('input[value=\"0.0.0.0\"]');if(wildcard)wildcard.onchange()}"
         + "function controlGroup(root,title){const g=document.createElement('fieldset'),l=document.createElement('legend');g.className='settings-subgroup';l.textContent=title;g.append(l);root.append(g);return g}"
         + "function addSelect(group,name,label,values,names={}){const l=document.createElement('label');l.append(document.createTextNode(label));const s=document.createElement('select');s.name=name;"
         + "for(const v of values){const o=new Option(names[v]||v.replace(/-/g,' '),v);s.add(o)}l.append(s);group.append(l);return s}"
@@ -165,7 +186,8 @@ public final class SnapshotHttpServer {
         + "for(const p of form.querySelectorAll('[data-color-picker]')){const f=form.elements[p.dataset.colorPicker];p.oninput=()=>{f.value=p.value};f.onchange=p.oninput;"
         + "f.oninput=()=>{if(/^#[0-9a-fA-F]{6}$/.test(f.value))p.value=f.value}}"
         + "$('load').onclick=async()=>{token=$('token').value;try{const [c,k]=await Promise.all([api('/api/config'),api('/api/capabilities')]);"
-        + "const s=c.settings;renderControls(k.controls);setSettings(s);"
+        + "const s=c.settings;renderControls(k.controls);setSettings(s);renderNetwork(s,c.network_interfaces||[]);$('network-status').textContent=c.network_status||'Listener status unavailable';"
+        + "$('certificate-link').hidden=s.https_enabled!=='on';loadedNetwork=[s.http_enabled,s.http_port,s.https_enabled,s.https_port,s.listen_addresses].join('|');"
         + "const size=form.elements.jpeg_size;size.replaceChildren();const a=new Option('auto — nearest to 1280x720 ('+k.auto_size+')','auto');a.disabled=!k.auto_supported;size.append(a);"
         + "for(const x of k.sizes){const o=document.createElement('option');o.value=x.size;o.disabled=!x.application_supported;o.textContent=x.size+(x.application_supported?'':' (not app-supported)')+' — min '+(x.min_frame_duration_ns??'unknown')+' ns, stall '+(x.jpeg_stall_duration_ns??'unknown')+' ns; timing estimate '+x.estimate_fps+' FPS';size.append(o)}"
         + "if(!Array.from(size.options).some(o=>o.value===s.jpeg_size))size.add(new Option(s.jpeg_size+' (unsupported)',s.jpeg_size));size.value=s.jpeg_size;"
@@ -173,12 +195,18 @@ public final class SnapshotHttpServer {
         + "if(c.effective_controls)result.textContent+='; last capture request: '+JSON.stringify(c.last_capture_request)+'; Camera2 result: '+JSON.stringify(c.effective_controls)"
         + "}catch(e){token='';$('token').value='';form.hidden=true;result.textContent='Could not load settings: '+e.message}};"
         + "form.onsubmit=async e=>{e.preventDefault();const p=new URLSearchParams(new FormData(form));"
-        + "for(const x of form.querySelectorAll('input[type=checkbox][name]:not([name=visible_field])'))p.set(x.name,x.checked?'on':'off');"
+        + "for(const x of form.querySelectorAll('input[type=checkbox][name]:not([name=visible_field]):not([name=network_address])'))p.set(x.name,x.checked?'on':'off');"
+        + "const selected=Array.from(form.querySelectorAll('input[name=network_address]:checked'),x=>x.value);if(!selected.length){result.textContent='Select at least one listen address.';return}"
+        + "p.delete('network_address');const addresses=selected.includes('0.0.0.0')?'0.0.0.0':selected.join(',');p.set('listen_addresses',addresses);"
+        + "const requested=[p.get('http_enabled'),p.get('http_port'),p.get('https_enabled'),p.get('https_port'),addresses].join('|');"
+        + "if(requested!==loadedNetwork&&!confirm('Applying these network settings may interrupt the active route. Keep authorized SSH/ADB recovery available. Continue?'))return;"
         + "const visible=Array.from(form.querySelectorAll('input[name=visible_field]:checked'),x=>x.value);p.delete('visible_field');p.set('fields',visible.length?visible.join(','):'none');"
         + "const f=form.elements.focus_mode,d=form.elements.focus_distance_diopters;if(d&&f&&f.value!=='manual')p.set('focus_distance_diopters','0');"
         + "const x=form.elements.exposure_mode;if(x&&x.value==='manual'){p.set('exposure_compensation','0');p.set('ae_lock','off')}"
         + "const w=form.elements.white_balance;if(w&&w.value!=='auto'&&form.elements.awb_lock)p.set('awb_lock','off');"
-        + "try{const c=await api('/api/config','PUT',p.toString());setSettings(c.settings);result.textContent='Saved.';"
+        + "try{const c=await api('/api/config','PUT',p.toString());setSettings(c.settings);loadedNetwork=[c.settings.http_enabled,c.settings.http_port,c.settings.https_enabled,c.settings.https_port,c.settings.listen_addresses].join('|');"
+        + "$('network-status').textContent=c.network_status||'Listener status unavailable';$('certificate-link').hidden=c.settings.https_enabled!=='on';"
+        + "result.textContent='Saved.';if(c.network_apply_error)result.textContent+='; active listeners unchanged: '+c.network_apply_error;"
         + "}catch(e){result.textContent='Not saved: '+e.message}};"
         + "function telemetryRow(group,label,value){const row=document.createElement('div'),name=document.createElement('span'),text=document.createElement('span');"
         + "row.className='telemetry-row';name.className='telemetry-label';name.textContent=label+':';text.className='telemetry-value';text.textContent=String(value);"
@@ -225,7 +253,8 @@ public final class SnapshotHttpServer {
         }
     }
     private final File snapshot;
-    private final int port;
+    private final List<ListenerSpec> listenerSpecs;
+    private final String certificatePem;
     private final Consumer<String> log;
     private final AdminTokenStore tokenStore;
     private final AdminApi adminApi;
@@ -252,12 +281,52 @@ public final class SnapshotHttpServer {
 
     public SnapshotHttpServer(File snapshot, int port, Consumer<String> log, AdminTokenStore tokenStore,
                               AdminApi adminApi, PublicTelemetryApi telemetryApi) {
+        this(snapshot, Collections.singletonList(new ListenerSpec(false, "0.0.0.0", port, null)),
+            null, log, tokenStore, adminApi, telemetryApi);
+    }
+
+    public SnapshotHttpServer(File snapshot, CaptureConfig config, SSLContext tlsContext, String certificatePem,
+                              Consumer<String> log, AdminTokenStore tokenStore, AdminApi adminApi,
+                              PublicTelemetryApi telemetryApi) {
+        this(snapshot, listenerSpecs(config, tlsContext), certificatePem, log, tokenStore, adminApi, telemetryApi);
+    }
+
+    private SnapshotHttpServer(File snapshot, List<ListenerSpec> listenerSpecs, String certificatePem,
+                               Consumer<String> log, AdminTokenStore tokenStore,
+                               AdminApi adminApi, PublicTelemetryApi telemetryApi) {
         this.snapshot = snapshot;
-        this.port = port;
+        this.listenerSpecs = listenerSpecs;
+        this.certificatePem = certificatePem;
         this.log = log;
         this.tokenStore = tokenStore;
         this.adminApi = adminApi;
         this.telemetryApi = telemetryApi;
+    }
+
+    private static List<ListenerSpec> listenerSpecs(CaptureConfig config, SSLContext tlsContext) {
+        if (!config.httpEnabled && !config.httpsEnabled) throw new IllegalArgumentException("network-no-enabled-transport");
+        if (config.httpsEnabled && tlsContext == null) throw new IllegalArgumentException("https-certificate-not-provisioned");
+        List<ListenerSpec> specs = new ArrayList<>();
+        for (String address : config.listenAddresses.split(",")) {
+            if (config.httpEnabled) specs.add(new ListenerSpec(false, address, config.httpPort, null));
+            if (config.httpsEnabled) specs.add(new ListenerSpec(true, address, config.httpsPort, tlsContext));
+        }
+        return specs;
+    }
+
+    private static final class ListenerSpec {
+        final boolean secure;
+        final String address;
+        final int port;
+        final SSLContext tlsContext;
+        ListenerSpec(boolean secure, String address, int port, SSLContext tlsContext) {
+            this.secure = secure;
+            this.address = address;
+            this.port = port;
+            this.tlsContext = tlsContext;
+        }
+
+        String describe() { return (secure ? "https://" : "http://") + address + ":" + port; }
     }
 
     /** Test hook; applies to the next start(). */
@@ -274,18 +343,33 @@ public final class SnapshotHttpServer {
     /** Binds synchronously so failures (such as an occupied port) are reported. Does nothing if already running. */
     public void start() throws IOException {
         synchronized (lock) {
-            if (session != null && session.acceptor.isAlive()) return;
-            ServerSocket socket = new ServerSocket();
+            if (session != null && session.isAlive()) return;
+            List<ServerSocket> sockets = new ArrayList<>();
             try {
-                socket.setReuseAddress(true);
-                socket.bind(new InetSocketAddress(InetAddress.getByName("0.0.0.0"), port), 8);
+                for (ListenerSpec spec : listenerSpecs) {
+                    ServerSocket socket = spec.secure
+                        ? spec.tlsContext.getServerSocketFactory().createServerSocket() : new ServerSocket();
+                    sockets.add(socket);
+                    socket.setReuseAddress(true);
+                    if (socket instanceof SSLServerSocket) {
+                        SSLServerSocket ssl = (SSLServerSocket) socket;
+                        List<String> protocols = new ArrayList<>();
+                        for (String protocol : ssl.getSupportedProtocols())
+                            if (protocol.equals("TLSv1.3") || protocol.equals("TLSv1.2")) protocols.add(protocol);
+                        if (protocols.isEmpty()) throw new IOException("No supported TLS protocol.");
+                        ssl.setEnabledProtocols(protocols.toArray(new String[0]));
+                    }
+                    socket.bind(new InetSocketAddress(parseIpv4(spec.address), spec.port), 8);
+                }
             } catch (IOException | RuntimeException e) {
-                closeQuietly(socket);
+                for (ServerSocket socket : sockets) closeQuietly(socket);
                 throw e;
             }
-            log.accept("Listening on 0.0.0.0:" + socket.getLocalPort() + "; endpoints: /, /snapshot.jpg, /stream.mjpg");
-            Session created = new Session(socket, maxConnections, maxStreams, streamIdleMillis, writeTimeoutMillis);
+            Session created = new Session(sockets, maxConnections, maxStreams, streamIdleMillis, writeTimeoutMillis);
             session = created;
+            for (int i = 0; i < sockets.size(); i++)
+                log.accept("Listening on " + listenerSpecs.get(i).describe().replace(":" + listenerSpecs.get(i).port,
+                    ":" + sockets.get(i).getLocalPort()) + "; endpoints: /, /snapshot.jpg, /stream.mjpg");
             created.begin();
         }
     }
@@ -299,15 +383,27 @@ public final class SnapshotHttpServer {
         }
         if (current == null) return;
         current.shutdown();
-        log.accept("HTTP server stopped");
+        log.accept("Network listeners stopped");
     }
 
     public boolean isRunning() {
-        synchronized (lock) { return session != null && session.acceptor.isAlive(); }
+        synchronized (lock) { return session != null && session.isAlive(); }
     }
 
     public int getLocalPort() {
-        synchronized (lock) { return session == null ? -1 : session.listener.getLocalPort(); }
+        synchronized (lock) { return session == null || session.listeners.isEmpty() ? -1 : session.listeners.get(0).getLocalPort(); }
+    }
+
+    public List<String> getBoundEndpoints() {
+        synchronized (lock) {
+            if (session == null) return Collections.emptyList();
+            List<String> result = new ArrayList<>();
+            for (int i = 0; i < session.listeners.size(); i++) {
+                ListenerSpec spec = listenerSpecs.get(i);
+                result.add((spec.secure ? "https://" : "http://") + spec.address + ":" + session.listeners.get(i).getLocalPort());
+            }
+            return Collections.unmodifiableList(result);
+        }
     }
 
     private static void closeQuietly(java.io.Closeable closeable) {
@@ -315,10 +411,23 @@ public final class SnapshotHttpServer {
         try { closeable.close(); } catch (IOException ignored) { }
     }
 
-    /** One start()..stop() generation: its own listener, threads, connection set and counters. */
+    private static InetAddress parseIpv4(String value) throws IOException {
+        String[] parts = value.split("\\.", -1);
+        if (parts.length != 4) throw new IOException("Invalid IPv4 listen address.");
+        byte[] bytes = new byte[4];
+        for (int i = 0; i < parts.length; i++) {
+            if (!parts[i].matches("0|[1-9][0-9]{0,2}")) throw new IOException("Invalid IPv4 listen address.");
+            int octet = Integer.parseInt(parts[i]);
+            if (octet > 255) throw new IOException("Invalid IPv4 listen address.");
+            bytes[i] = (byte) octet;
+        }
+        return InetAddress.getByAddress(bytes);
+    }
+
+    /** One start()..stop() generation: its own listeners, threads, connection set and counters. */
     private final class Session {
-        final ServerSocket listener;
-        final Thread acceptor;
+        final List<ServerSocket> listeners;
+        final List<Thread> acceptors = new ArrayList<>();
         final Thread watchdog;
         final Set<Conn> conns = ConcurrentHashMap.newKeySet();
         final AtomicInteger streams = new AtomicInteger();
@@ -326,35 +435,42 @@ public final class SnapshotHttpServer {
         final long idleMillis, writeMillis;
         volatile boolean closing;
 
-        Session(ServerSocket listener, int connLimit, int streamLimit, long idleMillis, long writeMillis) {
-            this.listener = listener;
+        Session(List<ServerSocket> listeners, int connLimit, int streamLimit, long idleMillis, long writeMillis) {
+            this.listeners = listeners;
             this.connLimit = connLimit;
             this.streamLimit = streamLimit;
             this.idleMillis = idleMillis;
             this.writeMillis = writeMillis;
-            acceptor = new Thread(this::acceptLoop, "snapshot-http");
-            acceptor.setUncaughtExceptionHandler((t, error) -> log.accept("HTTP thread crashed: " + error));
-            acceptor.setDaemon(true);
+            for (int i = 0; i < listeners.size(); i++) {
+                final ServerSocket listener = listeners.get(i);
+                Thread acceptor = new Thread(() -> acceptLoop(listener), "snapshot-network-listener-" + i);
+                acceptor.setUncaughtExceptionHandler((t, error) -> log.accept("Network listener thread crashed: " + error));
+                acceptor.setDaemon(true);
+                acceptors.add(acceptor);
+            }
             watchdog = new Thread(this::watchLoop, "snapshot-http-watchdog");
             watchdog.setDaemon(true);
         }
 
         void begin() {
             watchdog.start();
-            acceptor.start();
+            for (Thread acceptor : acceptors) acceptor.start();
+        }
+
+        boolean isAlive() {
+            for (Thread acceptor : acceptors) if (!acceptor.isAlive()) return false;
+            return !acceptors.isEmpty();
         }
 
         void shutdown() {
             closing = true;
-            closeQuietly(listener);
+            for (ServerSocket listener : listeners) closeQuietly(listener);
             List<Conn> open = new ArrayList<>(conns);
             for (Conn c : open) closeQuietly(c.socket);
-            if (acceptor != Thread.currentThread()) {
-                long deadline = System.nanoTime() + STOP_JOIN_MILLIS * 1000000L;
-                join(acceptor, deadline);
-                join(watchdog, deadline);
-                for (Conn c : open) join(c.thread, deadline);
-            }
+            long deadline = System.nanoTime() + STOP_JOIN_MILLIS * 1000000L;
+            for (Thread acceptor : acceptors) if (acceptor != Thread.currentThread()) join(acceptor, deadline);
+            join(watchdog, deadline);
+            for (Conn c : open) join(c.thread, deadline);
             watchdog.interrupt();
         }
 
@@ -364,7 +480,7 @@ public final class SnapshotHttpServer {
             try { thread.join(millis); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
 
-        void acceptLoop() {
+        void acceptLoop(ServerSocket listener) {
             try {
                 while (!closing && !listener.isClosed()) {
                     Socket client;
@@ -377,7 +493,9 @@ public final class SnapshotHttpServer {
                     }
                     if (closing) { closeQuietly(client); break; }
                     if (conns.size() >= connLimit) {
-                        try { rejectBusy(client); } catch (IOException | RuntimeException ignored) { }
+                        if (!(client instanceof SSLSocket)) {
+                            try { rejectBusy(client); } catch (IOException | RuntimeException ignored) { }
+                        }
                         closeQuietly(client);
                         continue;
                     }
@@ -394,8 +512,11 @@ public final class SnapshotHttpServer {
             } finally {
                 closeQuietly(listener);
                 boolean deliberate = closing;
-                Runnable callback = onTerminated;
-                if (!deliberate && callback != null) callback.run();
+                if (!deliberate) {
+                    shutdown();
+                    Runnable callback = onTerminated;
+                    if (callback != null) callback.run();
+                }
             }
         }
 
@@ -440,6 +561,10 @@ public final class SnapshotHttpServer {
 
             void run() {
                 try {
+                    if (socket instanceof SSLSocket) {
+                        socket.setSoTimeout(5000);
+                        ((SSLSocket) socket).startHandshake();
+                    }
                     handle(this);
                 } catch (IOException | RuntimeException e) {
                     if (!closing) log.accept("Client error: " + e);
@@ -504,7 +629,7 @@ public final class SnapshotHttpServer {
                 }
             }
             String host = headers.get("host");
-            if (host == null || !validAuthority(host)) {
+            if (host == null || !validAuthority(host, conn.socket instanceof SSLSocket, conn.socket.getLocalPort())) {
                 reply(conn, output, 400, "Bad Request", "text/plain", bytes("Invalid Host.\n"), false);
                 return;
             }
@@ -536,6 +661,8 @@ public final class SnapshotHttpServer {
             }
             if (path.equals("/snapshot.jpg")) {
                 serveSnapshot(conn, output, head, parts[0]);
+            } else if (path.equals("/server-certificate.pem") && certificatePem != null) {
+                reply(conn, output, 200, "OK", "application/x-pem-file", bytes(certificatePem), head);
             } else if (path.equals("/")) {
                 byte[] nonceBytes = new byte[18];
                 NONCES.nextBytes(nonceBytes);
@@ -551,30 +678,55 @@ public final class SnapshotHttpServer {
             }
         }
 
-        private boolean validAuthority(String authority) {
+        private boolean validAuthority(String authority, boolean secure, int localPort) {
             try {
-                URI uri = new URI("http://" + authority);
+                String scheme = secure ? "https" : "http";
+                URI uri = new URI(scheme + "://" + authority);
                 String host = uri.getHost();
-                if (host == null || uri.getRawUserInfo() != null || uri.getRawPath().length() != 0
-                    || uri.getRawQuery() != null || uri.getRawFragment() != null
-                    || uri.getPort() < 1 || uri.getPort() > 65535 || !isIpv4(host)) return false;
+                String path = uri.getRawPath();
+                if (host == null || uri.getRawUserInfo() != null || (path != null && !path.isEmpty())
+                    || uri.getRawQuery() != null || uri.getRawFragment() != null) return false;
+                int port = effectivePort(uri.getPort(), secure);
+                if (port < 1 || port > 65535 || !(isIpv4(host) || (secure && isDnsName(host)))) return false;
+                if (uri.getPort() == -1 && port != localPort) return false;
                 return true;
             } catch (URISyntaxException | RuntimeException e) {
                 return false;
             }
         }
 
-        private boolean sameOrigin(String origin, String host) {
+        private boolean sameOrigin(String origin, String host, boolean secure) {
             try {
                 URI uri = new URI(origin);
-                URI authority = new URI("http://" + host);
-                return "http".equals(uri.getScheme()) && uri.getRawUserInfo() == null
-                    && uri.getRawPath().isEmpty() && uri.getRawQuery() == null && uri.getRawFragment() == null
-                    && uri.getPort() == authority.getPort() && isIpv4(uri.getHost())
+                String scheme = secure ? "https" : "http";
+                URI authority = new URI(scheme + "://" + host);
+                return scheme.equals(uri.getScheme()) && uri.getRawUserInfo() == null
+                    && (uri.getRawPath() == null || uri.getRawPath().isEmpty())
+                    && uri.getRawQuery() == null && uri.getRawFragment() == null
+                    && effectivePort(uri.getPort(), secure) == effectivePort(authority.getPort(), secure)
+                    && validOriginHost(uri.getHost(), secure)
                     && uri.getHost().equalsIgnoreCase(authority.getHost());
             } catch (URISyntaxException | RuntimeException e) {
                 return false;
             }
+        }
+
+        private boolean validOriginHost(String host, boolean secure) {
+            return isIpv4(host) || (secure && isDnsName(host));
+        }
+
+        private boolean isDnsName(String host) {
+            if (host == null || host.length() > 253) return false;
+            String[] labels = host.split("\\.", -1);
+            for (String label : labels) {
+                if (label.isEmpty() || label.length() > 63 || !label.matches("[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"))
+                    return false;
+            }
+            return true;
+        }
+
+        private int effectivePort(int port, boolean secure) {
+            return port == -1 ? (secure ? 443 : 80) : port;
         }
 
         private boolean isIpv4(String host) {
@@ -611,8 +763,9 @@ public final class SnapshotHttpServer {
                 return;
             }
             String origin = headers.get("origin");
-            if ((origin != null && !sameOrigin(origin, host))
-                || (method.equals("PUT") && (origin == null || !sameOrigin(origin, host)
+            boolean secure = conn.socket instanceof SSLSocket;
+            if ((origin != null && !sameOrigin(origin, host, secure))
+                || (method.equals("PUT") && (origin == null || !sameOrigin(origin, host, secure)
                     || "cross-site".equalsIgnoreCase(headers.get("sec-fetch-site"))))) {
                 reply(conn, output, 403, "Forbidden", "application/json; charset=utf-8",
                     bytes("{\"error\":\"same-origin-required\"}"), false, "");

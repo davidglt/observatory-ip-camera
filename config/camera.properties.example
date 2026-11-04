@@ -94,6 +94,20 @@ mqtt_stale_seconds=120
 # configure them separately in app-private files/mqtt-credentials.properties.
 # The credential file is never returned by APIs, logs, config-export or config-import.
 
+# Network listeners. Defaults preserve the existing public IPv4 HTTP endpoint.
+# At least one of HTTP/HTTPS must remain enabled; both enabled ports must differ.
+# HTTPS needs a valid app-private PKCS#12 identity before the service can start.
+http_enabled=on
+http_port=8080
+https_enabled=off
+https_port=8443
+
+# Select 0.0.0.0 alone for all IPv4 interfaces, or a comma-separated set of
+# concrete IPv4 addresses. 127.0.0.1 is loopback. Concrete addresses must be
+# assigned when the listener is applied; unavailable choices remain saved and
+# reported but are never broadened to all interfaces.
+listen_addresses=0.0.0.0
+
 # When using scripts/camera-control.sh config-set, quote RGB values so the shell
 # passes the leading # as part of the assignment, for example:
 #   config-set 'text_color=#12ABCD' 'panel_text_color=#FF0000'

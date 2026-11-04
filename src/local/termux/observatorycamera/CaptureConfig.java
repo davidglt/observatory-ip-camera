@@ -55,6 +55,11 @@ public final class CaptureConfig {
     public static final String ORIENTATION_MODE = "orientation_mode";
     public static final String ROTATION_DEGREES = "rotation_degrees";
     public static final String MIRROR = "mirror";
+    public static final String HTTP_ENABLED = "http_enabled";
+    public static final String HTTP_PORT = "http_port";
+    public static final String HTTPS_ENABLED = "https_enabled";
+    public static final String HTTPS_PORT = "https_port";
+    public static final String LISTEN_ADDRESSES = "listen_addresses";
     public static final int MAX_LOCATION_LENGTH = 24;
 
     public static final int FIELD_LOCATION = 1;
@@ -73,6 +78,7 @@ public final class CaptureConfig {
     public static final int MIN_TEXT_SIZE = 10;
     public static final int MAX_TEXT_SIZE = 96;
     public static final int MAX_ASSIGNMENTS_LENGTH = 1024;
+    private static final int MAX_LISTEN_ADDRESSES_LENGTH = 2048;
     private static final String[] FIELD_NAMES = {
         "location", "datetime", "fps", "temperature", "humidity", "pressure", "battery",
         "battery_temperature", "charging", "thermal"
@@ -122,6 +128,11 @@ public final class CaptureConfig {
     public final String orientationMode;
     public final int rotationDegrees;
     public final boolean mirror;
+    public final boolean httpEnabled;
+    public final int httpPort;
+    public final boolean httpsEnabled;
+    public final int httpsPort;
+    public final String listenAddresses;
 
     private CaptureConfig(boolean overlayEnabled, String location, String position, int textSize, int fields,
                           long targetFpsTenths, String jpegSize, String textColor, String telemetryPosition,
@@ -132,7 +143,8 @@ public final class CaptureConfig {
                           float focusDistanceDiopters, String exposureMode, int exposureCompensation,
                           boolean aeLock, int iso, long exposureTimeNanos, String whiteBalance,
                           boolean awbLock, int jpegQuality, String orientationMode, int rotationDegrees,
-                          boolean mirror) {
+                          boolean mirror, boolean httpEnabled, int httpPort, boolean httpsEnabled,
+                          int httpsPort, String listenAddresses) {
         this.overlayEnabled = overlayEnabled;
         this.location = location;
         this.position = position;
@@ -167,6 +179,11 @@ public final class CaptureConfig {
         this.orientationMode = orientationMode;
         this.rotationDegrees = rotationDegrees;
         this.mirror = mirror;
+        this.httpEnabled = httpEnabled;
+        this.httpPort = httpPort;
+        this.httpsEnabled = httpsEnabled;
+        this.httpsPort = httpsPort;
+        this.listenAddresses = listenAddresses;
     }
 
     /** Conservative defaults: overlay on, NYX, bottom-left, size 24 (at 720 px short side), all visible fields, 1.0 FPS target. */
@@ -174,7 +191,8 @@ public final class CaptureConfig {
         return new CaptureConfig(true, "NYX", "bottom-left", 24, ALL_FIELDS, 10, "auto",
             TEXT_COLOR_GREEN, "right", true, "#FF0000", "#000000", 16, true, true, true,
             "", 1883, "homeassistant/nyx/reading", false, 120, "auto", 0f, "auto", 0, false,
-            100, 10_000_000L, "auto", false, 90, "auto", 0, false);
+            100, 10_000_000L, "auto", false, 90, "auto", 0, false,
+            true, 8080, false, 8443, "0.0.0.0");
     }
 
     /** Result of parsing: exactly one of config and error is non-null. */
@@ -220,6 +238,11 @@ public final class CaptureConfig {
         String orientationMode;
         int rotationDegrees;
         boolean mirror;
+        boolean httpEnabled;
+        int httpPort;
+        boolean httpsEnabled;
+        int httpsPort;
+        String listenAddresses;
         Draft(CaptureConfig c) {
             overlay = c.overlayEnabled; location = c.location; position = c.position;
             textSize = c.textSize; fields = c.fields; fps = c.targetFpsTenths; jpegSize = c.jpegSize;
@@ -234,6 +257,8 @@ public final class CaptureConfig {
             iso = c.iso; exposureTimeNanos = c.exposureTimeNanos; whiteBalance = c.whiteBalance;
             awbLock = c.awbLock; jpegQuality = c.jpegQuality; orientationMode = c.orientationMode;
             rotationDegrees = c.rotationDegrees; mirror = c.mirror;
+            httpEnabled = c.httpEnabled; httpPort = c.httpPort; httpsEnabled = c.httpsEnabled;
+            httpsPort = c.httpsPort; listenAddresses = c.listenAddresses;
         }
         CaptureConfig build() {
             return new CaptureConfig(overlay, location, position, textSize, fields, fps, jpegSize,
@@ -241,7 +266,7 @@ public final class CaptureConfig {
                 panelTextSize, panelEnvironment,
                 panelDevice, panelCapture, mqttHost, mqttPort, mqttTopic, mqttTls, mqttStaleSeconds,
                 focusMode, focusDistanceDiopters, exposureMode, exposureCompensation, aeLock, iso,
-                exposureTimeNanos, whiteBalance, awbLock, jpegQuality, orientationMode, rotationDegrees, mirror);
+                exposureTimeNanos, whiteBalance, awbLock, jpegQuality, orientationMode,                 rotationDegrees, mirror, httpEnabled, httpPort, httpsEnabled, httpsPort, listenAddresses);
         }
     }
 
@@ -415,6 +440,45 @@ public final class CaptureConfig {
                     return "invalid-rotation_degrees:expected-0-90-180-270";
                 d.rotationDegrees = Integer.parseInt(value);
                 return null;
+            case HTTP_ENABLED:
+            case HTTPS_ENABLED:
+                if (!value.equals("on") && !value.equals("off")) return "invalid-" + key + ":expected-on-or-off";
+                if (key.equals(HTTP_ENABLED)) d.httpEnabled = value.equals("on");
+                else d.httpsEnabled = value.equals("on");
+                return null;
+            case HTTP_PORT:
+            case HTTPS_PORT: {
+                int port = parseBoundedInt(value, 5);
+                if (port < 1 || port > 65535) return "invalid-" + key + ":expected-1-65535";
+                if (key.equals(HTTP_PORT)) d.httpPort = port;
+                else d.httpsPort = port;
+                return null;
+            }
+            case LISTEN_ADDRESSES: {
+                if (value.isEmpty() || value.length() > MAX_LISTEN_ADDRESSES_LENGTH)
+                    return "invalid-listen_addresses:expected-ipv4-address-list";
+                String[] addresses = value.split(",", -1);
+                Set<String> seen = new HashSet<>();
+                for (String address : addresses) {
+                    if (!validIpv4(address) || !seen.add(address))
+                        return "invalid-listen_addresses:expected-unique-ipv4-addresses";
+                }
+                if (seen.contains("0.0.0.0") && seen.size() != 1)
+                    return "invalid-listen_addresses:wildcard-cannot-be-combined";
+                List<String> ordered = new ArrayList<>(seen);
+                java.util.Collections.sort(ordered, (a, b) -> {
+                    if (a.equals("0.0.0.0")) return -1;
+                    if (b.equals("0.0.0.0")) return 1;
+                    String[] aa = a.split("\\."), bb = b.split("\\.");
+                    for (int i = 0; i < 4; i++) {
+                        int compare = Integer.compare(Integer.parseInt(aa[i]), Integer.parseInt(bb[i]));
+                        if (compare != 0) return compare;
+                    }
+                    return 0;
+                });
+                d.listenAddresses = String.join(",", ordered);
+                return null;
+            }
             default:
                 return "unknown-key:" + safe(key);
         }
@@ -436,7 +500,8 @@ public final class CaptureConfig {
             String error = apply(draft, key, part.substring(eq + 1));
             if (error != null) return new Parsed(null, error);
         }
-        return new Parsed(draft.build(), null);
+        String finalError = validateNetwork(draft);
+        return finalError == null ? new Parsed(draft.build(), null) : new Parsed(null, finalError);
     }
 
     /**
@@ -444,29 +509,31 @@ public final class CaptureConfig {
      * their defaults; unknown keys, bad values and oversized sets are rejected as a whole.
      */
     public static Parsed fromEntries(Map<String, String> entries) {
-        if (entries.size() > 48) return new Parsed(null, "too-many-keys");
+        if (entries.size() > 64) return new Parsed(null, "too-many-keys");
         Draft draft = new Draft(defaults());
         for (Map.Entry<String, String> e : entries.entrySet()) {
             String value = e.getValue();
-            if (value == null || value.length() > 128) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
+            if (value == null || value.length() > maxValueLength(e.getKey())) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
             String error = apply(draft, e.getKey(), value);
             if (error != null) return new Parsed(null, error);
         }
-        return new Parsed(draft.build(), null);
+        String finalError = validateNetwork(draft);
+        return finalError == null ? new Parsed(draft.build(), null) : new Parsed(null, finalError);
     }
 
     /** Applies a complete set of decoded properties without parsing shell assignment syntax. */
     public static Parsed updateEntries(Map<String, String> entries, CaptureConfig base) {
         if (entries == null || entries.isEmpty()) return new Parsed(null, "no-assignments");
-        if (entries.size() > 48) return new Parsed(null, "too-many-keys");
+        if (entries.size() > 64) return new Parsed(null, "too-many-keys");
         Draft draft = new Draft(base);
         for (Map.Entry<String, String> e : entries.entrySet()) {
             String value = e.getValue();
-            if (value == null || value.length() > 128) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
+            if (value == null || value.length() > maxValueLength(e.getKey())) return new Parsed(null, "value-too-long:" + safe(e.getKey()));
             String error = apply(draft, e.getKey(), value);
             if (error != null) return new Parsed(null, error);
         }
-        return new Parsed(draft.build(), null);
+        String finalError = validateNetwork(draft);
+        return finalError == null ? new Parsed(draft.build(), null) : new Parsed(null, finalError);
     }
 
     public java.util.Map<String, String> toMap() {
@@ -505,6 +572,11 @@ public final class CaptureConfig {
         m.put(ORIENTATION_MODE, orientationMode);
         m.put(ROTATION_DEGREES, Integer.toString(rotationDegrees));
         m.put(MIRROR, mirror ? "on" : "off");
+        m.put(HTTP_ENABLED, httpEnabled ? "on" : "off");
+        m.put(HTTP_PORT, Integer.toString(httpPort));
+        m.put(HTTPS_ENABLED, httpsEnabled ? "on" : "off");
+        m.put(HTTPS_PORT, Integer.toString(httpsPort));
+        m.put(LISTEN_ADDRESSES, listenAddresses);
         return m;
     }
 
@@ -587,6 +659,28 @@ public final class CaptureConfig {
             if (label.isEmpty() || label.length() > 63 || label.startsWith("-") || label.endsWith("-")) return false;
         }
         return true;
+    }
+
+    private static boolean validIpv4(String host) {
+        String[] octets = host.split("\\.", -1);
+        if (octets.length != 4) return false;
+        for (String octet : octets) {
+            if (!octet.matches("0|[1-9][0-9]{0,2}")) return false;
+            if (Integer.parseInt(octet) > 255) return false;
+        }
+        return true;
+    }
+
+    private static int maxValueLength(String key) {
+        return LISTEN_ADDRESSES.equals(key) ? MAX_LISTEN_ADDRESSES_LENGTH : 128;
+    }
+
+    private static String validateNetwork(Draft draft) {
+        if (!draft.httpEnabled && !draft.httpsEnabled)
+            return "invalid-network:at-least-one-transport-must-remain-enabled";
+        if (draft.httpEnabled && draft.httpsEnabled && draft.httpPort == draft.httpsPort)
+            return "invalid-network:enabled-transport-ports-must-differ";
+        return null;
     }
 
     private static boolean validMqttTopic(String topic) {

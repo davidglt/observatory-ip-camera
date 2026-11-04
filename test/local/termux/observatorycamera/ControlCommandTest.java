@@ -23,7 +23,10 @@ public final class ControlCommandTest {
         check(ControlCommand.parse("start", new String(new char[41]).replace('\0', 'a')) == null, "long id");
         check(ControlCommand.parse("status", null).requestId.equals("-"), "default id");
         check(ControlCommand.line("i", "start", "error", "a\nb\r\nc").equals("CONTROL id=i cmd=start result=error a b c"), "line");
-        for (String c : new String[]{"continuous-start", "continuous-stop", "continuous-status", "config-show", "config-reset", "config-export", "config-import"}) check(ControlCommand.parse(c, "x").name.equals(c), c);
+        for (String c : new String[]{"continuous-start", "continuous-stop", "continuous-status", "config-show", "config-reset",
+            "config-export", "config-import", "config-validate", "config-reload", "network-apply",
+            "certificate-import", "certificate-status", "certificate-export"})
+            check(ControlCommand.parse(c, "x").name.equals(c), c);
         check(ControlCommand.parse("config-set", "x") == null && ControlCommand.parse("config-set", "x", "") == null, "config-set needs assignments");
         check(ControlCommand.parse("config-set", "x", "overlay=off").config.equals("overlay=off"), "config kept");
         check(ControlCommand.parse("continuous-start", "x", "overlay=off").config == null, "config ignored elsewhere");
