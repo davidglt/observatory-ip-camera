@@ -29,9 +29,15 @@ case "$1" in
         else cat "$FAKE_EXPORT" 2>/dev/null </dev/null; fi ;;
     logcat) cat "$FAKE_LOGCAT" 2>/dev/null </dev/null ;;
     shell)
-        # The only call allowed to consume stdin: the exact config-import upload command.
+        # Uploads are restricted to the known private staging slots.
         if [[ $2 == "run-as local.termux.observatorycamera sh -c 'cat > files/camera.import'" && $# -eq 2 ]]; then
             cat > "$FAKE_UPLOAD"; exit 0
+        fi
+        if [[ $2 == "run-as local.termux.observatorycamera sh -c 'umask 077; cat > files/https-server.import.p12'" && $# -eq 2 ]]; then
+            cat > "$FAKE_CERT_UPLOAD"; exit 0
+        fi
+        if [[ $2 == "run-as local.termux.observatorycamera sh -c 'umask 077; cat > files/https-server.import.password'" && $# -eq 2 ]]; then
+            cat > "$FAKE_CERT_PASSWORD"; exit 0
         fi
         case "$2 $3" in
             "pm path") [[ $S == noapp ]] || echo "package:/data/app/x.apk" ;;
@@ -53,7 +59,7 @@ esac
 exit 0
 FAKE
 chmod +x "$T/adb"
-export ADB="$T/adb" FAKE_LOGCAT="$T/logcat" FAKE_EXPORT="$T/export" FAKE_UPLOAD="$T/upload"
+export ADB="$T/adb" FAKE_LOGCAT="$T/logcat" FAKE_EXPORT="$T/export" FAKE_UPLOAD="$T/upload" FAKE_CERT_UPLOAD="$T/cert-upload" FAKE_CERT_PASSWORD="$T/cert-password"
 unset TARGET
 C=scripts/camera-control.sh
 fails=0
@@ -153,6 +159,8 @@ FAKE_LOGLINE="cmd=config-set result=config overlay=off applied=next-frame" expec
 grep -q -- "--es config 'overlay=off'" "$FAKE_LOG" && echo "ok config passed single-quoted" || { echo "FAIL config quoting"; fails=$((fails+1)); }
 FAKE_LOGLINE="cmd=config-set result=config fields=none applied=next-frame" expect config-set-no-fields 0 "fields=none" -s T --no-wake --timeout 5 config-set fields=
 grep -q -- "--es config 'fields='" "$FAKE_LOG" && echo "ok empty field selection passed" || { echo "FAIL empty field selection quoting"; fails=$((fails+1)); }
+FAKE_LOGLINE="cmd=config-set result=config saved=true network=not-applied networkError=network-bind-failed" \
+    expect config-listener-apply-failed 3 "listeners were unchanged" -s T --no-wake --timeout 5 config-set http_port=8081
 export FAKE_LOGLINE="cmd=config-set result=config panel_text_color=#123456 mqtt_host= applied=next-frame"
 expect telemetry-config-set 0 "panel_text_color=#123456" -s T --no-wake --timeout 5 config-set \
     panel_text_color=#123456 mqtt_host= mqtt_topic=homeassistant/nyx/reading
@@ -173,6 +181,29 @@ expect config-import-missing 2 "Cannot read" -s T config-import --in "$T/none"
 expect config-import-needs-in 2 "needs --in" -s T config-import
 head -c 9000 /dev/zero > "$T/big"
 expect config-import-big 2 "larger than" -s T config-import --in "$T/big"
+FAKE_LOGLINE="cmd=config-validate result=valid file=present" expect config-validate 0 "Valid:" -s T config-validate
+FAKE_LOGLINE="cmd=config-reload result=reloaded file=present" expect config-reload 0 "Reloaded:" -s T config-reload
+FAKE_LOGLINE="cmd=network-apply result=reloaded file=present" expect network-apply 0 "Reloaded:" -s T network-apply
+FAKE_LOGLINE="cmd=certificate-status result=ready sha256=ABCD expires=2030-01-01" \
+    expect certificate-status 0 "sha256=ABCD" -s T certificate-status
+printf '%s\n' '-----BEGIN CERTIFICATE-----' 'public-only' '-----END CERTIFICATE-----' > "$FAKE_EXPORT"
+FAKE_LOGLINE="cmd=certificate-export result=exported file=https-server.pem" \
+    expect certificate-export 0 "Public certificate exported" -s T certificate-export --out "$T/public.pem"
+grep -q '^-----BEGIN CERTIFICATE-----$' "$T/public.pem" \
+    && ! grep -q 'PRIVATE KEY' "$T/public.pem" && echo "ok public certificate export contains no private key" \
+    || { echo "FAIL certificate export content"; fails=$((fails+1)); }
+printf 'pkcs12-payload' > "$T/server.p12"
+printf 'private-password' > "$T/password"
+FAKE_LOGLINE="cmd=certificate-import result=imported sha256=ABCD expires=2030-01-01" \
+    expect certificate-import 0 "Private key and password remain app-private" -s T certificate-import --in "$T/server.p12" --password-file "$T/password"
+cmp -s "$T/server.p12" "$T/cert-upload" && cmp -s "$T/password" "$T/cert-password" \
+    && echo "ok certificate and password staged separately" || { echo "FAIL certificate staging"; fails=$((fails+1)); }
+if grep -Fq 'private-password' "$FAKE_LOG" "$FAKE_LOGCAT"; then
+    echo "FAIL certificate password leaked to adb command/log output"; fails=$((fails+1))
+else echo "ok certificate password absent from adb command and log output"; fi
+expect certificate-generate-invalid-san 2 "Invalid IP/DNS SAN" -s T certificate-generate --san 'IP:999.2.3.4'
+expect certificate-generate-leading-zero-ip 2 "Invalid IP/DNS SAN" -s T certificate-generate --san 'IP:008.2.3.4'
+expect certificate-generate-invalid-dns 2 "Invalid IP/DNS SAN" -s T certificate-generate --san 'DNS:camera..example'
 export FAKE_TOKEN=$(printf 'A%.0s' $(seq 1 43))
 FAKE_LOGLINE="cmd=admin-token-show result=ready token_file=http-admin.token" expect admin-token-show 0 "plaintext HTTP.*$FAKE_TOKEN" -s T --no-wake --timeout 5 admin-token-show
 FAKE_LOGLINE="cmd=admin-token-rotate result=rotated token_file=http-admin.token" expect admin-token-rotate 0 "plaintext HTTP.*$FAKE_TOKEN" -s T --no-wake --timeout 5 admin-token-rotate

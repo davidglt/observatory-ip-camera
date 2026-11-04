@@ -8,7 +8,7 @@
 set -uo pipefail
 
 PKG=local.termux.observatorycamera
-APP_PORT="${APP_PORT:-8080}"
+APP_PORT="${APP_PORT:-}"
 ADB="${ADB:-adb}"
 TIMEOUT=20
 WAKE=1
@@ -17,6 +17,10 @@ OUT=
 IN=
 LINES=60
 CONFIG=
+PASSWORD_FILE=
+SAN=
+CERT_TMP=
+GENERATE_TMP=
 TARGET="${TARGET:-}"
 
 EX_USAGE=2 EX_FAIL=3 EX_STOPPED=4 EX_TIMEOUT=5 EX_INCONSISTENT=6 EX_BUSY=7 EX_DEVICE=10 EX_PERM=11
@@ -26,8 +30,8 @@ usage() {
 Usage: camera-control.sh (-s|--target TARGET | TARGET env) [options] SUBCOMMAND
 
 Subcommands:
-  start              start the HTTP server (needs POST_NOTIFICATIONS already granted)
-  stop               stop the HTTP server (service only; the app is not force-stopped)
+  start              start the configured HTTP/HTTPS listeners (needs POST_NOTIFICATIONS)
+  stop               stop the network listeners (service only; the app is not force-stopped)
   status             report app-side state and probe the real listener
   capture [--out F]  capture one JPEG now; optionally fetch it after fresh-capture evidence
   fetch --out FILE   copy the stored snapshot.jpg (the latest stored file, NOT proof of a fresh capture)
@@ -43,11 +47,21 @@ Subcommands:
   config-export --out FILE   save the live camera.properties (normalized) to FILE on this host
   config-import --in FILE    upload FILE, validate it completely on the device, then replace the live settings
                      (invalid file: nothing changes, exit 2 with the reason). Applied from the next frame.
+  config-validate    validate directly edited camera.properties without changing it
+  config-reload      validate and reload camera, MQTT and network settings
+  network-apply      apply saved listener settings without restarting capture
+  certificate-generate --san IP:127.0.0.1,DNS:camera.example
+                     generate an explicit one-year self-signed identity and install it app-privately
+  certificate-import --in FILE --password-file FILE
+                     validate and atomically install a PKCS#12 identity; never pass password contents as arguments
+  certificate-status show certificate SHA-256 fingerprint and expiry (never private key material)
+  certificate-export --out FILE export only the public PEM certificate
   admin-token-show   provision if needed and print the persistent HTTP settings token (explicit local control only)
   admin-token-rotate invalidate the previous HTTP settings token and print a new one
   setup-permissions  grant CAMERA and POST_NOTIFICATIONS via 'pm grant' (only when you run it)
 
-Options: --timeout SECONDS (default 20), --no-wake, --force (fetch overwrite), --out FILE, --lines N
+Options: --timeout SECONDS (default 20), --no-wake, --force (fetch overwrite), --out FILE, --in FILE,
+         --password-file FILE, --san IP:ADDRESS,DNS:NAME, --lines N
 TARGET is the exact adb serial or host:port of a device you have verified (see 'adb devices').
 Exit codes: 0 ok, 2 usage, 3 failure, 4 stopped, 5 timeout, 6 inconsistent, 7 camera busy, 10 device/app, 11 permission.
 USAGE
@@ -63,11 +77,13 @@ while [[ $# -gt 0 ]]; do
         --timeout) [[ $# -ge 2 ]] || die $EX_USAGE "--timeout needs a value"; TIMEOUT=$2; shift 2 ;;
         --in) [[ $# -ge 2 ]] || die $EX_USAGE "--in needs a value"; IN=$2; shift 2 ;;
         --out) [[ $# -ge 2 ]] || die $EX_USAGE "--out needs a value"; OUT=$2; shift 2 ;;
+        --password-file) [[ $# -ge 2 ]] || die $EX_USAGE "--password-file needs a value"; PASSWORD_FILE=$2; shift 2 ;;
+        --san) [[ $# -ge 2 ]] || die $EX_USAGE "--san needs a value"; SAN=$2; shift 2 ;;
         --lines) [[ $# -ge 2 ]] || die $EX_USAGE "--lines needs a value"; LINES=$2; shift 2 ;;
         --no-wake) WAKE=0; shift ;;
         --force) FORCE=1; shift ;;
         -h|--help|help) usage; exit 0 ;;
-        start|stop|status|capture|fetch|logs|setup-permissions|continuous-start|continuous-stop|continuous-status|config-show|config-set|config-reset|config-export|config-import|admin-token-show|admin-token-rotate)
+        start|stop|status|capture|fetch|logs|setup-permissions|continuous-start|continuous-stop|continuous-status|config-show|config-set|config-reset|config-export|config-import|config-validate|config-reload|network-apply|certificate-generate|certificate-import|certificate-status|certificate-export|admin-token-show|admin-token-rotate)
             [[ -z $SUB ]] || die $EX_USAGE "Only one subcommand allowed."; SUB=$1; shift ;;
         *=*)
             [[ $SUB == config-set ]] || die $EX_USAGE "Unexpected assignment '$1' (only valid after config-set)."
@@ -81,13 +97,26 @@ done
 [[ $TARGET =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] || die $EX_USAGE "Invalid target '$TARGET'."
 [[ $TIMEOUT =~ ^[0-9]+$ && $TIMEOUT -ge 1 && $TIMEOUT -le 300 ]] || die $EX_USAGE "--timeout must be 1-300."
 [[ $LINES =~ ^[0-9]+$ ]] || die $EX_USAGE "--lines must be a number."
-[[ $APP_PORT =~ ^[0-9]+$ ]] || die $EX_USAGE "APP_PORT must be a number."
+[[ -z $APP_PORT || ( $APP_PORT =~ ^[0-9]+$ && $APP_PORT -ge 1 && $APP_PORT -le 65535 ) ]] || die $EX_USAGE "APP_PORT must be 1-65535."
 case $SUB in fetch) [[ -n $OUT ]] || die $EX_USAGE "fetch needs --out FILE." ;; esac
 [[ $SUB != config-export || -n $OUT ]] || die $EX_USAGE "config-export needs --out FILE."
-if [[ $SUB == config-import ]]; then
+if [[ $SUB == config-import || $SUB == certificate-import ]]; then
     [[ -n $IN ]] || die $EX_USAGE "config-import needs --in FILE."
     [[ -f $IN && -r $IN ]] || die $EX_USAGE "Cannot read $IN."
-    (( $(wc -c < "$IN") <= 8192 )) || die $EX_USAGE "$IN is larger than 8192 bytes."
+    if [[ $SUB == config-import ]]; then
+        (( $(wc -c < "$IN") <= 8192 )) || die $EX_USAGE "$IN is larger than 8192 bytes."
+    else
+        [[ -n $PASSWORD_FILE && -f $PASSWORD_FILE && -r $PASSWORD_FILE ]] \
+            || die $EX_USAGE "certificate-import needs a readable --password-file."
+        (( $(wc -c < "$IN") <= 2097152 )) || die $EX_USAGE "$IN is larger than 2097152 bytes."
+        (( $(wc -c < "$PASSWORD_FILE") <= 256 )) || die $EX_USAGE "Certificate password file is larger than 256 bytes."
+    fi
+fi
+[[ $SUB != certificate-export || -n $OUT ]] || die $EX_USAGE "certificate-export needs --out FILE."
+if [[ $SUB == certificate-generate ]]; then
+    [[ -n $SAN ]] || die $EX_USAGE "certificate-generate needs --san IP:ADDRESS,DNS:NAME."
+    [[ $SAN =~ ^(IP:[0-9.]+|DNS:[A-Za-z0-9.-]+)(,(IP:[0-9.]+|DNS:[A-Za-z0-9.-]+))*$ ]] \
+        || die $EX_USAGE "Invalid SAN list; use comma-separated IP:IPv4 and DNS:name entries."
 fi
 if [[ $SUB == config-set ]]; then
     [[ -n $CONFIG ]] || die $EX_USAGE "config-set needs at least one KEY=VALUE."
@@ -132,20 +161,111 @@ send_control() {
 }
 
 FWD_PORT=
-cleanup() { [[ -n $FWD_PORT ]] && adbt forward --remove "tcp:$FWD_PORT" >/dev/null 2>&1; FWD_PORT=; }
+cleanup() {
+    [[ -n $FWD_PORT ]] && adbt forward --remove "tcp:$FWD_PORT" >/dev/null 2>&1
+    FWD_PORT=
+    [[ -n $CERT_TMP ]] && rm -rf "$CERT_TMP"
+    CERT_TMP=
+    [[ -n $GENERATE_TMP ]] && rm -rf "$GENERATE_TMP"
+    GENERATE_TMP=
+}
 trap cleanup EXIT
 
-# Sets HTTP_CODE to the status of an ObservatoryNative response, or "" when nothing is listening.
+# Read only non-secret network properties; missing keys preserve the release defaults.
+read_network_config() {
+    local properties
+    properties=$(adbt exec-out run-as "$PKG" cat files/camera.properties 2>/dev/null) || properties=
+    property() {
+        local key=$1 fallback=$2 value
+        value=$(awk -F= -v key="$key" '$1==key {value=substr($0,index($0,"=")+1)} END {print value}' <<<"$properties")
+        printf '%s' "${value:-$fallback}"
+    }
+    HTTP_ENABLED=$(property http_enabled on)
+    HTTP_PORT=${APP_PORT:-$(property http_port 8080)}
+    HTTPS_ENABLED=$(property https_enabled off)
+    HTTPS_PORT=$(property https_port 8443)
+    LISTEN_ADDRESSES=$(property listen_addresses 0.0.0.0)
+}
+
+probe_certificate() {
+    [[ -n $CERT_TMP && -s $CERT_TMP ]] && return 0
+    CERT_TMP=$(mktemp) || return 1
+    if ! adbt exec-out run-as "$PKG" cat "files/https-server.pem" > "$CERT_TMP" 2>/dev/null || [[ ! -s $CERT_TMP ]]; then
+        rm -f "$CERT_TMP"
+        CERT_TMP=
+        return 1
+    fi
+    chmod 600 "$CERT_TMP"
+}
+
+probe_endpoint() { # scheme address port
+    local scheme=$1 address=$2 port=$3 probe_address local_port head connect_host tls_host san_dns
+    probe_address=$address
+    PROBE_ENABLED=$((PROBE_ENABLED + 1))
+    if [[ $address == 0.0.0.0 || $address == 127.0.0.1 ]]; then
+        probe_address=127.0.0.1
+        if [[ -n $FWD_PORT ]]; then adbt forward --remove "tcp:$FWD_PORT" >/dev/null 2>&1 || true; FWD_PORT=; fi
+        FWD_PORT=$(adbt forward tcp:0 "tcp:$port" 2>/dev/null | tr -dc '0-9')
+        [[ -n $FWD_PORT ]] || { PROBE_DETAIL="${PROBE_DETAIL:+$PROBE_DETAIL, }$scheme://$address:$port=forward-error"; return; }
+        connect_host=127.0.0.1
+        local_port=$FWD_PORT
+    else
+        connect_host=$address
+        local_port=$port
+    fi
+    if [[ $scheme == https ]]; then
+        if ! probe_certificate; then
+            PROBE_DETAIL="${PROBE_DETAIL:+$PROBE_DETAIL, }https://$address:$port=certificate-unavailable"
+            return
+        fi
+        command -v openssl >/dev/null || die $EX_DEVICE "OpenSSL is required to verify HTTPS certificate hostnames (pkg install openssl)."
+        san_dns=$(openssl x509 -in "$CERT_TMP" -noout -ext subjectAltName 2>/dev/null \
+            | grep -oE 'DNS:[A-Za-z0-9.-]+' | head -n 1 | cut -d: -f2)
+        tls_host=${san_dns:-$probe_address}
+        head=$(curl --cacert "$CERT_TMP" --connect-to "$tls_host:$port:$connect_host:$local_port" \
+            -s -m 3 -I "https://$tls_host:$port/snapshot.jpg" 2>/dev/null | tr -d '\r') || true
+    else
+        head=$(curl --connect-to "$probe_address:$port:$connect_host:$local_port" \
+            -s -m 3 -I "http://$probe_address:$port/snapshot.jpg" 2>/dev/null | tr -d '\r') || true
+    fi
+    if grep -qi '^Server: ObservatoryNative' <<<"$head"; then
+        local code
+        code=$(awk 'NR==1{print $2}' <<<"$head")
+        [[ -n $HTTP_CODE ]] || HTTP_CODE=$code
+        PROBE_RESPONSES=$((PROBE_RESPONSES + 1))
+        PROBE_DETAIL="${PROBE_DETAIL:+$PROBE_DETAIL, }$scheme://$address:$port=$code"
+    else
+        PROBE_DETAIL="${PROBE_DETAIL:+$PROBE_DETAIL, }$scheme://$address:$port=unreachable-or-untrusted"
+    fi
+    if [[ -n $FWD_PORT ]]; then adbt forward --remove "tcp:$FWD_PORT" >/dev/null 2>&1 || true; FWD_PORT=; fi
+}
+
+# Sets HTTP_CODE and checks every configured protocol/address; HTTPS uses the app's public cert.
 probe_http() {
     HTTP_CODE=
-    command -v curl >/dev/null || die $EX_DEVICE "curl is required for HTTP probing (pkg install curl)."
-    if [[ -z $FWD_PORT ]]; then
-        FWD_PORT=$(adbt forward tcp:0 "tcp:$APP_PORT" 2>/dev/null | tr -dc '0-9')
-        [[ -n $FWD_PORT ]] || die $EX_DEVICE "adb forward failed."
+    PROBE_ENABLED=0
+    PROBE_RESPONSES=0
+    PROBE_DETAIL=
+    command -v curl >/dev/null || die $EX_DEVICE "curl is required for listener probing (pkg install curl)."
+    read_network_config
+    local address
+    if [[ $HTTP_ENABLED == on ]]; then
+        if [[ $LISTEN_ADDRESSES == 0.0.0.0 ]]; then
+            probe_endpoint http 0.0.0.0 "$HTTP_PORT"
+        else
+            IFS=, read -r -a addresses <<<"$LISTEN_ADDRESSES"
+            for address in "${addresses[@]}"; do probe_endpoint http "$address" "$HTTP_PORT"; done
+        fi
     fi
-    local head
-    head=$(curl -s -m 3 -I "http://127.0.0.1:$FWD_PORT/snapshot.jpg" 2>/dev/null | tr -d '\r') || true
-    if grep -qi '^Server: ObservatoryNative' <<<"$head"; then HTTP_CODE=$(awk 'NR==1{print $2}' <<<"$head"); fi
+    if [[ $HTTPS_ENABLED == on ]]; then
+        if [[ $LISTEN_ADDRESSES == 0.0.0.0 ]]; then
+            probe_endpoint https 0.0.0.0 "$HTTPS_PORT"
+        else
+            IFS=, read -r -a addresses <<<"$LISTEN_ADDRESSES"
+            for address in "${addresses[@]}"; do probe_endpoint https "$address" "$HTTPS_PORT"; done
+        fi
+    fi
+    if [[ -n $FWD_PORT ]]; then adbt forward --remove "tcp:$FWD_PORT" >/dev/null 2>&1 || true; FWD_PORT=; fi
 }
 
 describe_http() {
@@ -161,7 +281,8 @@ wait_http_state() { # up|down -> 0 reached, 1 timed out
     local deadline=$((SECONDS + TIMEOUT))
     while :; do
         probe_http
-        if [[ $1 == up && -n $HTTP_CODE ]] || [[ $1 == down && -z $HTTP_CODE ]]; then return 0; fi
+        if [[ $1 == up && $PROBE_ENABLED -gt 0 && $PROBE_RESPONSES -eq $PROBE_ENABLED ]] \
+            || [[ $1 == down && $PROBE_RESPONSES -eq 0 ]]; then return 0; fi
         (( SECONDS >= deadline )) && return 1
         sleep 1
     done
@@ -200,8 +321,8 @@ cmd_start() {
         sleep 1
     done
     # The app logged 'listening'; verify the real listener independently.
-    wait_http_state up || die $EX_TIMEOUT "Timeout: app reported listening but no ObservatoryNative HTTP response on device port $APP_PORT."
-    echo "RUNNING: $(describe_http "$HTTP_CODE")"
+    wait_http_state up || die $EX_TIMEOUT "Timeout: app reported listening but requested endpoints did not all respond: $PROBE_DETAIL"
+    echo "RUNNING: $(describe_http "$HTTP_CODE"); endpoints: $PROBE_DETAIL"
 }
 
 cmd_status() {
@@ -217,11 +338,13 @@ cmd_status() {
     echo "App: ${line#*result=status }"
     running=$(sed -n 's/.* running=\([a-z]*\).*/\1/p' <<<"$line")
     probe_http
-    if [[ -n $HTTP_CODE ]]; then
-        [[ $running == true ]] || die $EX_INCONSISTENT "HTTP is answering but the app says it is not running (stale/other server on port $APP_PORT?)."
-        echo "RUNNING: $(describe_http "$HTTP_CODE")"; exit 0
+    if [[ $PROBE_RESPONSES -gt 0 ]]; then
+        [[ $running == true ]] || die $EX_INCONSISTENT "HTTP is answering (or the listener probe found an endpoint) but the app says it is not running: $PROBE_DETAIL"
+        [[ $PROBE_RESPONSES -eq $PROBE_ENABLED ]] \
+            || die $EX_INCONSISTENT "Only some requested listeners answered ($PROBE_RESPONSES/$PROBE_ENABLED): $PROBE_DETAIL"
+        echo "RUNNING: $(describe_http "$HTTP_CODE"); endpoints: $PROBE_DETAIL"; exit 0
     fi
-    [[ $running == true ]] && die $EX_INCONSISTENT "App says running but nothing answers on port $APP_PORT."
+    [[ $running == true ]] && die $EX_INCONSISTENT "App says running but no configured HTTP/HTTPS listener answered: $PROBE_DETAIL"
     if grep -q 'lastError=' <<<"$line"; then die $EX_FAIL "STOPPED after a start failure: ${line#*lastError=}"; fi
     echo "STOPPED"; exit $EX_STOPPED
 }
@@ -363,7 +486,27 @@ cmd_config() { # config-show | config-set | config-reset
     send_control "$SUB" "$id" "$CONFIG"
     line=$(wait_control "$id" "$SUB" 'result=(config|failed)') || die $EX_TIMEOUT "Timeout waiting for the settings result."
     grep -q 'result=failed' <<<"$line" && die $EX_USAGE "Rejected, nothing changed: ${line#*reason=}"
+    grep -q 'network=not-applied' <<<"$line" \
+        && die $EX_FAIL "Settings were saved, but listeners were unchanged: ${line#*networkError=}. Fix the requested endpoints, then run network-apply."
     echo "Config: ${line#*result=config }"
+}
+
+cmd_config_validate() {
+    local id line
+    id=$(new_id)
+    send_control config-validate "$id"
+    line=$(wait_control "$id" config-validate 'result=(valid|failed)') || die $EX_TIMEOUT "Timeout validating camera.properties."
+    grep -q 'result=failed' <<<"$line" && die $EX_USAGE "Validation failed; no settings changed: ${line#*reason=}"
+    echo "Valid: ${line#*result=valid }"
+}
+
+cmd_config_reload() {
+    local id line
+    id=$(new_id)
+    send_control "$SUB" "$id"
+    line=$(wait_control "$id" "$SUB" 'result=(reloaded|failed)') || die $EX_TIMEOUT "Timeout reloading camera.properties."
+    grep -q 'result=failed' <<<"$line" && die $EX_FAIL "Reload was not applied: ${line#*reason=}"
+    echo "Reloaded: ${line#*result=reloaded }"
 }
 
 cmd_config_export() {
@@ -392,6 +535,98 @@ cmd_config_import() {
     echo "Imported: ${line#*result=config }"
 }
 
+cmd_certificate_import() {
+    local id line
+    adbt shell "run-as $PKG sh -c 'umask 077; cat > files/https-server.import.p12'" < "$IN" \
+        || die $EX_DEVICE "Could not stage PKCS#12 in app-private storage."
+    if ! adbt shell "run-as $PKG sh -c 'umask 077; cat > files/https-server.import.password'" < "$PASSWORD_FILE"; then
+        adbt shell "run-as $PKG rm -f files/https-server.import.p12 files/https-server.import.password" >/dev/null 2>&1 || true
+        die $EX_DEVICE "Could not stage certificate password file."
+    fi
+    id=$(new_id)
+    send_control certificate-import "$id"
+    line=$(wait_control "$id" certificate-import 'result=(imported|failed)') \
+        || die $EX_TIMEOUT "Timeout validating the staged server identity."
+    grep -q 'result=failed' <<<"$line" && die $EX_USAGE "Certificate import rejected; prior identity retained: ${line#*reason=}"
+    echo "Imported: ${line#*result=imported }"
+    echo "Private key and password remain app-private; HTTPS must be enabled and restarted explicitly."
+}
+
+validate_san_list() {
+    local entry value octet label
+    local -a entries parts
+    IFS=, read -r -a entries <<<"$SAN"
+    for entry in "${entries[@]}"; do
+        case $entry in
+            IP:*)
+                value=${entry#IP:}
+                IFS=. read -r -a parts <<<"$value"
+                [[ ${#parts[@]} -eq 4 ]] || return 1
+                for octet in "${parts[@]}"; do
+                    [[ $octet =~ ^(0|[1-9][0-9]{0,2})$ && $octet -le 255 ]] || return 1
+                done ;;
+            DNS:*)
+                value=${entry#DNS:}
+                [[ ${#value} -le 253 && $value =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ \
+                    && $value != *..* ]] || return 1
+                IFS=. read -r -a parts <<<"$value"
+                for label in "${parts[@]}"; do
+                    [[ ${#label} -le 63 && $label =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+                done ;;
+            *) return 1 ;;
+        esac
+    done
+}
+
+cmd_certificate_generate() {
+    validate_san_list || die $EX_USAGE "Invalid IP/DNS SAN entry."
+    command -v openssl >/dev/null || die $EX_DEVICE "OpenSSL is required in the authorized Termux shell (pkg install openssl)."
+    GENERATE_TMP=$(mktemp -d) || die $EX_FAIL "Could not create a private temporary directory."
+    chmod 700 "$GENERATE_TMP"
+    umask 077
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$GENERATE_TMP/password"
+    openssl req -x509 -newkey rsa:3072 -nodes -sha256 -days 365 \
+        -keyout "$GENERATE_TMP/server-key.pem" -out "$GENERATE_TMP/server-cert.pem" \
+        -subj '/CN=Observatory IP Camera' -addext "subjectAltName=$SAN" >/dev/null 2>&1 \
+        || die $EX_FAIL "Self-signed certificate generation failed."
+    openssl pkcs12 -export -out "$GENERATE_TMP/server.p12" -inkey "$GENERATE_TMP/server-key.pem" \
+        -in "$GENERATE_TMP/server-cert.pem" -name server -passout "file:$GENERATE_TMP/password" \
+        >/dev/null 2>&1 || die $EX_FAIL "PKCS#12 packaging failed."
+    chmod 600 "$GENERATE_TMP/server.p12" "$GENERATE_TMP/password"
+    IN="$GENERATE_TMP/server.p12"
+    PASSWORD_FILE="$GENERATE_TMP/password"
+    cmd_certificate_import
+}
+
+cmd_certificate_status() {
+    local id line
+    id=$(new_id)
+    send_control certificate-status "$id"
+    line=$(wait_control "$id" certificate-status 'result=(ready|missing|failed)') \
+        || die $EX_TIMEOUT "Timeout reading certificate status."
+    grep -q 'result=ready' <<<"$line" || die $EX_FAIL "No valid server certificate is installed."
+    echo "Certificate: ${line#*result=ready }"
+}
+
+cmd_certificate_export() {
+    local id line tmp
+    [[ ! -e $OUT || $FORCE -eq 1 ]] || die $EX_USAGE "$OUT exists; use --force to overwrite."
+    id=$(new_id)
+    send_control certificate-export "$id"
+    line=$(wait_control "$id" certificate-export 'result=(exported|failed)') \
+        || die $EX_TIMEOUT "Timeout exporting the public certificate."
+    grep -q 'result=failed' <<<"$line" && die $EX_FAIL "Public certificate export failed."
+    tmp=$(mktemp "${OUT}.XXXXXX") || die $EX_USAGE "Cannot create temporary file next to $OUT."
+    if ! adbt exec-out run-as "$PKG" cat files/https-server.pem > "$tmp" 2>/dev/null \
+        || [[ ! -s $tmp ]] || ! grep -q '^-----BEGIN CERTIFICATE-----$' "$tmp" \
+        || grep -q 'PRIVATE KEY' "$tmp"; then
+        rm -f "$tmp"; die $EX_FAIL "Only a public PEM certificate may be exported."
+    fi
+    chmod 600 "$tmp"
+    mv "$tmp" "$OUT"
+    echo "Public certificate exported to $OUT; no private key was copied."
+}
+
 cmd_admin_token() {
     local id line token command
     if [[ $SUB == admin-token-rotate ]]; then command=admin-token-rotate; else command=admin-token-show; fi
@@ -402,7 +637,7 @@ cmd_admin_token() {
     token=$(adbt exec-out run-as "$PKG" cat files/http-admin.token 2>/dev/null | tr -d '\r\n') \
         || die $EX_FAIL "Could not retrieve the app-private token through run-as."
     [[ $token =~ ^[A-Za-z0-9_-]{43}$ ]] || die $EX_FAIL "The app-private token file is missing or invalid."
-    printf 'HTTP admin token (plaintext HTTP; store securely and enter only in the viewer): %s\n' "$token"
+    printf 'HTTP admin token (plaintext HTTP risk; never enter it over unencrypted HTTP; store securely and enter only in the viewer): %s\n' "$token"
 }
 
 cmd_logs() {
@@ -443,7 +678,13 @@ case $SUB in
     continuous-stop) cmd_continuous_stop ;;
     continuous-status) cmd_continuous_status ;;
     config-show|config-set|config-reset) cmd_config ;;
+    config-validate) cmd_config_validate ;;
+    config-reload|network-apply) cmd_config_reload ;;
     config-export) cmd_config_export ;;
     config-import) cmd_config_import ;;
+    certificate-generate) cmd_certificate_generate ;;
+    certificate-import) cmd_certificate_import ;;
+    certificate-status) cmd_certificate_status ;;
+    certificate-export) cmd_certificate_export ;;
     admin-token-show|admin-token-rotate) cmd_admin_token ;;
 esac

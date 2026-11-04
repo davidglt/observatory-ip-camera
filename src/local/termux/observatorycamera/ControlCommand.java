@@ -27,6 +27,12 @@ public final class ControlCommand {
     public static final String CONFIG_RESET = "config-reset";
     public static final String CONFIG_EXPORT = "config-export";
     public static final String CONFIG_IMPORT = "config-import";
+    public static final String CONFIG_VALIDATE = "config-validate";
+    public static final String CONFIG_RELOAD = "config-reload";
+    public static final String NETWORK_APPLY = "network-apply";
+    public static final String CERTIFICATE_IMPORT = "certificate-import";
+    public static final String CERTIFICATE_STATUS = "certificate-status";
+    public static final String CERTIFICATE_EXPORT = "certificate-export";
     public static final String ADMIN_TOKEN_SHOW = "admin-token-show";
     public static final String ADMIN_TOKEN_ROTATE = "admin-token-rotate";
     public static final String EXTRA_CONFIG = "config";
@@ -46,7 +52,10 @@ public final class ControlCommand {
     private static boolean known(String c) {
         return c.equals(START) || c.equals(STOP) || c.equals(STATUS) || c.equals(CONTINUOUS_START) || c.equals(CONTINUOUS_STOP)
             || c.equals(CONTINUOUS_STATUS) || c.equals(CONFIG_SHOW) || c.equals(CONFIG_SET) || c.equals(CONFIG_RESET)
-            || c.equals(CONFIG_EXPORT) || c.equals(CONFIG_IMPORT) || c.equals(ADMIN_TOKEN_SHOW) || c.equals(ADMIN_TOKEN_ROTATE);
+            || c.equals(CONFIG_EXPORT) || c.equals(CONFIG_IMPORT) || c.equals(CONFIG_VALIDATE)
+            || c.equals(CONFIG_RELOAD) || c.equals(NETWORK_APPLY) || c.equals(CERTIFICATE_IMPORT)
+            || c.equals(CERTIFICATE_STATUS) || c.equals(CERTIFICATE_EXPORT)
+            || c.equals(ADMIN_TOKEN_SHOW) || c.equals(ADMIN_TOKEN_ROTATE);
     }
 
     /** Commands that start the camera service and therefore need a resumed activity. */

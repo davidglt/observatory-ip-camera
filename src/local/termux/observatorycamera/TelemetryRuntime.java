@@ -13,7 +13,7 @@ final class TelemetryRuntime {
     private static final EnvironmentalTelemetry ENVIRONMENT = new EnvironmentalTelemetry();
     private static MqttEnvironmentalSubscriber subscriber;
     private static CaptureConfig activeConfig;
-    private static long credentialsModified;
+    private static byte[] credentialsFingerprint;
 
     private TelemetryRuntime() {}
 
@@ -23,11 +23,22 @@ final class TelemetryRuntime {
 
     static synchronized void reconfigure(Context context, CaptureConfig config) {
         java.io.File credentials = new java.io.File(context.getFilesDir(), MqttCredentialsStore.FILE_NAME);
-        long modified = credentials.exists() ? credentials.lastModified() : 0;
-        if (sameMqttConfiguration(activeConfig, config) && credentialsModified == modified) return;
+        byte[] fingerprint;
+        try {
+            fingerprint = MqttCredentialFingerprint.read(credentials);
+        } catch (java.io.IOException e) {
+            fingerprint = new byte[0];
+        }
+        boolean sameSource = sameMqttSource(activeConfig, config);
+        if (sameSource && MqttCredentialFingerprint.matches(credentialsFingerprint, fingerprint)) {
+            activeConfig = config;
+            return;
+        }
         stopSubscriber();
+        if (!sameSource) ENVIRONMENT.reset(config.mqttHost.isEmpty() ? "disabled" : "connecting");
         activeConfig = config;
-        credentialsModified = modified;
+        if (credentialsFingerprint != null) java.util.Arrays.fill(credentialsFingerprint, (byte) 0);
+        credentialsFingerprint = fingerprint;
         subscriber = new MqttEnvironmentalSubscriber(ENVIRONMENT);
         subscriber.start(context.getApplicationContext(), config);
     }
@@ -35,7 +46,9 @@ final class TelemetryRuntime {
     static synchronized void stop() {
         stopSubscriber();
         activeConfig = null;
-        credentialsModified = 0;
+        if (credentialsFingerprint != null) java.util.Arrays.fill(credentialsFingerprint, (byte) 0);
+        credentialsFingerprint = null;
+        ENVIRONMENT.reset("disabled");
         ENVIRONMENT.setConnectionState("disabled", null);
     }
 
@@ -49,10 +62,9 @@ final class TelemetryRuntime {
             : activeConfig.mqttStaleSeconds * 1000L;
     }
 
-    private static boolean sameMqttConfiguration(CaptureConfig a, CaptureConfig b) {
+    private static boolean sameMqttSource(CaptureConfig a, CaptureConfig b) {
         return a != null && a.mqttHost.equals(b.mqttHost) && a.mqttPort == b.mqttPort
-            && a.mqttTopic.equals(b.mqttTopic) && a.mqttTls == b.mqttTls
-            && a.mqttStaleSeconds == b.mqttStaleSeconds;
+            && a.mqttTopic.equals(b.mqttTopic) && a.mqttTls == b.mqttTls;
     }
 
     private static void stopSubscriber() {

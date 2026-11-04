@@ -18,13 +18,16 @@ public final class CaptureConfigTest {
         return p.config;
     }
     private static void bad(String a) { check(CaptureConfig.parse(a, CaptureConfig.defaults()).config == null, "should reject: " + a); }
+    private static String legacyDescription(CaptureConfig config) {
+        return config.describe().substring(0, config.describe().indexOf(" http_enabled="));
+    }
 
     public static void main(String[] args) {
         CaptureConfig d = CaptureConfig.defaults();
         check(d.overlayEnabled && d.location.equals("NYX") && d.position.equals("bottom-left"), "defaults");
         check(d.targetFpsTenths == 10 && d.targetIntervalNanos() == 1_000_000_000L, "default 1 FPS");
         check(d.jpegSize.equals("auto"), "legacy files retain automatic default resolution");
-        check(d.describe().equals("overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps target_fps=1.0 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), d.describe());
+        check(legacyDescription(d).equals("overlay=on location=NYX position=bottom-left text_size=24 fields=location,datetime,fps target_fps=1.0 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), d.describe());
         check(d.fields == CaptureConfig.ALL_FIELDS && !d.hasField(CaptureConfig.FIELD_TEMPERATURE)
             && !d.hasField(CaptureConfig.FIELD_BATTERY) && !d.hasField(CaptureConfig.FIELD_THERMAL),
             "new overlay fields default off");
@@ -43,7 +46,7 @@ public final class CaptureConfigTest {
         check(CaptureConfig.parse("target_fps=0", d).error.equals("invalid-target_fps:must-be-positive"), "zero has clear error");
         check(CaptureConfig.parse("target_fps=922337203685477580.8", d).error.equals("invalid-target_fps:outside-representable-range"), "overflow has clear error");
         check(ok("jpeg_size=1920x1080").jpegSize.equals("1920x1080"), "explicit JPEG size");
-        check(ok("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime,frames").describe()
+        check(legacyDescription(ok("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime,frames"))
             .equals("overlay=off location=Site-1 position=top-right text_size=40 fields=datetime target_fps=1.0 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), "legacy frame field is discarded");
         check(ok("fields=frames,location").fieldsString().equals("location"), "legacy frame field is ignored");
         check(ok("fields=").fieldsString().equals("none") && ok("fields=none").fieldsString().equals("none"),
@@ -62,6 +65,13 @@ public final class CaptureConfigTest {
         check(ok("telemetry_position=right").telemetryPosition.equals("right")
             && ok("telemetry_position=left").telemetryPosition.equals("left"), "both panel positions accepted");
         check(ok("mqtt_host=").mqttHost.isEmpty(), "empty MQTT host disables subscriber");
+        CaptureConfig network = ok("listen_addresses=192.168.1.4,127.0.0.1 http_enabled=off https_enabled=on https_port=9443");
+        check(network.listenAddresses.equals("127.0.0.1,192.168.1.4") && !network.httpEnabled
+            && network.httpsEnabled && network.httpPort == 8080 && network.httpsPort == 9443,
+            "network selection is canonical and permits HTTPS-only configuration");
+        check(ok("listen_addresses=0.0.0.0").listenAddresses.equals("0.0.0.0"),
+            "wildcard accepted");
+        bad("listen_addresses=192.168.1.4,192.168.1.4");
         CaptureConfig imageControls = ok("focus_mode=manual focus_distance_diopters=5.25 exposure_mode=manual exposure_compensation=0 ae_lock=off iso=800 exposure_time_ns=20000000 white_balance=daylight awb_lock=off jpeg_quality=75 orientation_mode=manual rotation_degrees=270 mirror=on");
         check(imageControls.focusMode.equals("manual") && imageControls.focusDistanceDiopters == 5.25f
             && imageControls.exposureMode.equals("manual") && imageControls.iso == 800
@@ -79,7 +89,9 @@ public final class CaptureConfigTest {
             "panel_background_color=#12345", "telemetry_position=middle",
             "panel_text_size=9", "panel_text_size=49", "panel_environment=yes", "mqtt_host=bad/host",
             "mqtt_port=0", "mqtt_port=65536", "mqtt_host=-bad.example", "mqtt_topic=bad topic", "mqtt_topic=room/#/other",
-            "mqtt_tls=yes", "mqtt_stale_seconds=9",
+            "mqtt_tls=yes", "mqtt_stale_seconds=9", "listen_addresses=", "listen_addresses=0.0.0.0,127.0.0.1",
+            "listen_addresses=127.0.0.1,127.0.0.1", "listen_addresses=127.0.0.256", "http_port=0",
+            "https_port=65536", "http_enabled=off https_enabled=off", "http_port=8443 https_enabled=on",
             "mqtt_stale_seconds=3601", "bogus=1", "overlay=on overlay=off", "focus_mode=unknown",
             "focus_distance_diopters=-1", "focus_distance_diopters=NaN", "focus_distance_diopters=Infinity",
             "exposure_mode=night", "exposure_compensation=1.2", "iso=0", "exposure_time_ns=0",
@@ -90,6 +102,8 @@ public final class CaptureConfigTest {
         CaptureConfig.Parsed atomic = CaptureConfig.parse("overlay=off bogus=1", d);
         check(atomic.config == null && d.overlayEnabled, "atomic: nothing applied on error");
         check(ok("text_color=green").toMap().get("text_color").equals("green"), "green accepted");
+        check(ok("https_enabled=on https_port=8080 http_port=8443").httpsPort == 8080,
+            "port swaps validate after the whole candidate is parsed");
         Map<String, String> entries = new LinkedHashMap<>();
         entries.put("location", "Obs 1");
         check(CaptureConfig.fromEntries(entries).config.location.equals("Obs 1"), "space inside location allowed in files");

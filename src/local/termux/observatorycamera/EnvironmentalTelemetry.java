@@ -49,6 +49,14 @@ final class EnvironmentalTelemetry {
         this.error = error;
     }
 
+    synchronized void reset(String state) {
+        if (!state.equals("disabled") && !state.equals("connecting"))
+            throw new IllegalArgumentException("Invalid MQTT reset state.");
+        latest = null;
+        connectionState = state;
+        error = null;
+    }
+
     synchronized String state(long nowMillis, long staleMillis) {
         if (connectionState.equals("disabled") || connectionState.equals("connecting")
             || connectionState.equals("disconnected") || connectionState.equals("error")) return connectionState;

@@ -42,12 +42,24 @@ final class MqttCredentialsStore {
             }
             bytes = java.util.Arrays.copyOf(bytes, count);
         }
-        String text = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        String text;
+        try {
+            text = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        } catch (java.nio.charset.CharacterCodingException e) {
+            throw new IllegalArgumentException("invalid-credentials-file");
+        }
         Properties properties = new Properties();
-        properties.load(new StringReader(text));
+        try { properties.load(new StringReader(text)); }
+        catch (IllegalArgumentException e) { throw new IllegalArgumentException("invalid-credentials-file"); }
         String username = properties.getProperty("username");
         String password = properties.getProperty("password");
-        if (properties.size() > 2 || (username != null && username.length() > 128)
+        for (String key : properties.stringPropertyNames())
+            if (!key.equals("username") && !key.equals("password"))
+                throw new IllegalArgumentException("invalid-credentials-file");
+        if ((username != null && username.length() > 128)
             || (password != null && password.length() > 256)
             || (username != null && username.isEmpty()) || (password != null && password.isEmpty())
             || (username == null) != (password == null))

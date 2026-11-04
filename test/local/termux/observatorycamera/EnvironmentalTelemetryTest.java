@@ -26,6 +26,11 @@ public final class EnvironmentalTelemetryTest {
         check(sensor.latest().timestampEpochMillis == first.timestampEpochMillis, "old retained sample cannot replace newer reading");
         check(sensor.state(now, 120_000).equals("fresh"), "old retained sample cannot refresh reading");
         check(sensor.state(now + 120_001, 120_000).equals("stale"), "source timestamp controls stale state");
+        sensor.setConnectionState("disconnected", null);
+        check(sensor.latest() != null, "same-source reconnect keeps the last reading");
+        sensor.reset("connecting");
+        check(sensor.latest() == null && sensor.state(now, 120_000).equals("connecting"),
+            "switching MQTT source clears old readings and ordering state");
 
         for (String invalid : new String[] {
             "[]", "{}", "{\"timestamp_epoch\":1}", "{\"timestamp_epoch\":1,\"timestamp_epoch\":1,\"temperature_c\":1,\"humidity_pct\":1,\"pressure_hpa\":300}",

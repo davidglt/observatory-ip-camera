@@ -2,11 +2,11 @@
 
 Native Java Android camera app developed, compiled and signed in Termux. Source, comments, messages and documentation are in English.
 
-## Current release: 0.8.0 (telemetry and Settings layout)
+## Current development version: 0.9.0 (network listeners and optional TLS)
 
-Release 0.8.0 adds grouped Settings sections and responsive telemetry rows with whole-value wrapping and separators between visible telemetry groups. It preserves the 0.7.0 Camera2 image controls and the 0.6.0 device/environment telemetry and independently configurable JPEG overlay.
+Version 0.9.0 adds configurable IPv4 HTTP/HTTPS listeners, explicit certificate provisioning and network status while preserving the Camera2 controls, camera ownership, telemetry lifecycle, and the maintainer-validated Settings organization, telemetry separators and whole-value wrapping with 4ch indentation. This is a development version, not a stable-release claim.
 
-The current automated test evidence and limits are in [Testing and validation](#testing-and-validation). No Samsung device or browser is available for this change, so hardware and rendered-browser behavior must be checked using the manual checklist below.
+The maintainer-reported visual check was limited to the Settings organization and telemetry layout; it is not comprehensive device or browser validation. Current automated evidence and its limits are in [Testing and validation](#testing-and-validation).
 
 ## Guide
 
@@ -15,6 +15,7 @@ The current automated test evidence and limits are in [Testing and validation](#
 - [Manual installation and native service verification](#install-and-test-over-ssh)
 - [Operate the server and camera](#operation-and-security)
 - [SSH administration](#ssh-administration)
+- [Network listeners and HTTPS](#network-listeners-and-https)
 - [Settings](#browser-settings)
 - [Image controls](#camera-image-controls-available-since-070)
 - [MQTT and environmental sensor](#mqtt-and-environmental-sensor)
@@ -39,9 +40,9 @@ The owner validated the previous capture implementation at 1280x720, retrieved t
 
 ## Operation and security
 
-WARNING: While the server is running, the read-only viewer, snapshot and MJPEG routes are unauthenticated and HTTP is unencrypted. The Settings/configuration/capability APIs require the app-private admin bearer token, but HTTP sends that token in plaintext to network observers. Use only a trusted private network; this is trusted-LAN-only, not Internet-safe or TLS. Do not configure router port forwarding or expose it to the Internet. Binding to 0.0.0.0 is not IPv6 support, Internet publication or a guarantee that Android/network policy permits remote access. Use the actual phone address in the browser, not 0.0.0.0.
+WARNING: The read-only viewer, snapshot and MJPEG routes are unauthenticated over both HTTP and HTTPS. HTTPS encrypts transport but does not enable authentication. HTTP sends the admin bearer token in plaintext to network observers; do not enter or use the admin token over HTTP. Use only a trusted private network and do not configure router forwarding or expose either listener to the Internet. Binding to 0.0.0.0 is IPv4 only and does not guarantee Android/network policy permits remote access. Use the actual phone address in a browser, not 0.0.0.0.
 
-The server no longer starts with the application process. It runs only in SnapshotHttpService, a foreground service started by pressing Start server in a visible, resumed MainActivity (or by the shell-protected non-touch ControlActivity, see below), or stopped by Stop server or the Stop action of its ongoing notification (which also offers Open app). Start and Stop are idempotent; there is never more than one listener. Stop closes the listening socket and any active client socket and ends the worker thread. The UI shows "running" only after the port was bound successfully; a bind failure (for example port 8080 occupied) or a start failure is shown as an error and the service stops itself.
+The server no longer starts with the application process. It runs only in SnapshotHttpService, a foreground service started by pressing Start server in a visible, resumed MainActivity (or by the shell-protected non-touch ControlActivity, see below), or stopped by Stop server or the Stop action of its ongoing notification (which also offers Open app). Start and Stop are idempotent. One service owns all configured address/protocol sockets; listeners do not create camera owners or duplicate telemetry/MQTT lifecycles. Stop closes listening and active client sockets. The UI reports requested and actually bound endpoints; a bind or TLS setup failure is an error, never a successful wildcard fallback.
 
 Notification permission: on Android 13 (API 33) the app asks for POST_NOTIFICATIONS when you press Start server. If it is denied (or notifications/the channel are blocked), the server is not started, because a running server must stay visible and stoppable.
 
@@ -51,7 +52,7 @@ Restart semantics: START_NOT_STICKY. If Android kills the process the server sta
 
 A foreground service is not a guarantee. Android may still kill the process, and Doze, battery policy, Wi-Fi power saving or network suspension can make the server unreachable, especially with the screen off. No wake lock, Wi-Fi lock or battery-optimization bypass is used. It does not bypass lock-screen or camera restrictions: capture still needs a visible, resumed, focused activity and runs only on demand; the service never uses the camera. Force-stopping the app stops the service and server. The debuggable APK is for development only.
 
-Connections are handled concurrently with explicit limits (see "MJPEG stream and viewer"). Headers are limited to 8192 bytes and each complete request has a five-second deadline; API request bodies are limited to 4096 bytes. Host/origin checks accept numeric IPv4 authorities only (including `127.0.0.1` for SSH forwarding; DNS names are rejected); API mutations require `PUT`, matching same-origin `Origin`, and bearer auth. No permissive CORS, cookies, or GET mutations are used. Snapshot JPEG size is limited to 16 MiB. Camera writes publish the image using the existing temporary-file rename. The server reads an opened snapshot file and never exposes arbitrary paths. No image bytes or admin tokens are logged. Old snapshots survive restarts and failed capture attempts.
+Connections are handled concurrently with explicit limits (see "MJPEG stream and viewer"). Headers are limited to 8192 bytes and each complete request has a five-second deadline; API request bodies are limited to 4096 bytes. HTTP Host/Origin checks accept IPv4 authorities; HTTPS also accepts validated DNS names. Mutations require `PUT`, a matching same-origin `Origin`, and bearer auth. No permissive CORS, cookies, or GET mutations are used. Snapshot JPEG size is limited to 16 MiB. Camera writes publish the image using the existing temporary-file rename. No image bytes or admin tokens are logged.
 
 ## SSH administration
 
@@ -78,7 +79,7 @@ Options: `--timeout SECONDS` (default 20), `--no-wake` (skip the KEYCODE_WAKEUP 
 
 How it works:
 - start/stop/status launch ControlActivity (explicit component, extras `command` = start|stop|status and `request_id`, validated; invalid values are logged and ignored; handled identically in onCreate and onNewIntent). The foreground service is started only while that activity is resumed; if it is not resumed the start is deferred until onResume and the script reports a timeout (screen off/locked/dozing). Foreground-start restrictions are never bypassed. The activity never shows permission dialogs.
-- Results are CONTROL lines under the ObservatoryControl log tag, matched by a fresh unique request id, so old log lines are not mistaken for current results. `start` waits (bounded) for the service to log `listening`, then probes the real listener (through `adb forward tcp:0`, no fixed host port) instead of trusting `am start`. It distinguishes: running with a snapshot (HTTP 200), running without a snapshot yet (HTTP 404), unreadable snapshot (503), stopped, start failure (for example occupied port, blocked notifications, with the reason) and timeout.
+- Results are CONTROL lines under the ObservatoryControl log tag, matched by a fresh unique request id, so old log lines are not mistaken for current results. `start` waits (bounded) for the service to log `listening`, then probes every requested HTTP/HTTPS endpoint (using ADB forwarding for loopback/wildcard bindings) instead of trusting `am start`. It distinguishes a snapshot response (200), no snapshot yet (404), unreadable snapshot (503), partial/unreachable listeners, stopped, start failure and timeout.
 - `stop` stops only the service (the app is not force-stopped) and waits until the listener is down.
 - `capture` runs `am start -W` on MainActivity with `--ez capture true --ez no_prompt true --es request_id ID`. It never uses `am start -S`, so a running server survives. `no_prompt` makes a missing camera permission an error instead of a dialog. Fresh evidence: the app logs `CONTROL id=ID cmd=capture result=saved ...` after publishing the file, and the script also compares the snapshot file identity (inode-mtime-size) before and after. Capture still needs a resumed activity with window focus (screen on, not dozing); pause cancels it. `--out FILE` fetches afterwards.
 - `fetch` copies the latest stored files/snapshot.jpg through `run-as` (debuggable APK), checks the JPEG marker and refuses to overwrite without `--force`. Fetching alone is NOT proof of a fresh capture; use `capture` (or compare `logs` output) for that.
@@ -87,6 +88,69 @@ How it works:
 Security of the control entry: ControlActivity is exported but declared with `android:permission="android.permission.DUMP"`, a signature/development permission that the adb shell (and root) hold and that the platform enforces when an activity is started; ordinary apps do not hold it and are rejected. This does not make the entry fully private: code in the same UID, root, and any app that was explicitly granted DUMP (for example via `adb shell pm grant`) can still invoke it, and it is the platform permission check, not the explicit intent or request_id extra (a plain log correlation token), that restricts callers. The token show/rotate commands are explicit operations through this protected control entry; the script reads the app-private file with `run-as` only after a successful control response. The token value is never returned through an intent or log. The launcher MainActivity must remain exported, and its pre-existing `capture` extra is therefore callable by any local app; it can only trigger a single capture from a visible activity, but it is not caller-authenticated. The service and receivers are not exported. The DUMP enforcement is expected platform behavior but was not verified on a device here.
 
 Not promised: lock-screen bypass, background camera, Doze immunity, automatic recovery after reboot or process death, or initial adb pairing.
+
+## Network listeners and HTTPS
+
+The backward-compatible defaults are HTTP enabled on port 8080, HTTPS disabled on port 8443, and `listen_addresses=0.0.0.0`. HTTP and HTTPS each accept ports 1–65535; enabled listeners cannot share a port, and at least one transport must stay enabled. The Settings Network group lists `all` (`0.0.0.0`), `loopback` (`127.0.0.1`), and the current IPv4 addresses of non-loopback interfaces using their actual interface names. `all` is exclusive; concrete addresses may be combined. Entries are deduplicated and sorted deterministically. An address that disappears remains selected and visible as unavailable; it is never replaced with the wildcard. DHCP and interface changes require refreshing the page/discovery, selecting the new address if appropriate, then applying settings.
+
+The page shows persisted/requested endpoints separately from endpoints actually bound, including bind/certificate errors. Applying network changes warns that the current route can be interrupted. A replacement listener set is staged before the old set is closed; if staging fails, the old listeners remain available and the page reports that they were unchanged. Some changes overlap an existing port and cannot be staged; stop and restart the service after resolving the conflict. Keep authorized SSH/ADB access available for recovery. Network changes do not acquire the camera or start additional telemetry/MQTT clients.
+
+### Direct properties editing and reload
+
+Every ordinary setting, including the network settings, is stored in app-private `files/camera.properties`; secrets and certificate files are separate. Direct editing is supported when performed atomically and followed by explicit validation/reload. Start with the checked-in [`config/camera.properties.example`](config/camera.properties.example), edit a local copy, and use an explicit `TARGET`:
+
+```sh
+TARGET='VERIFIED_ADB_SERIAL_OR_HOST:PORT'
+adb -s "$TARGET" shell "run-as local.termux.observatorycamera sh -c 'umask 077; cat > files/camera.properties.tmp && mv files/camera.properties.tmp files/camera.properties'" < camera.properties
+bash scripts/camera-control.sh -s "$TARGET" config-validate
+bash scripts/camera-control.sh -s "$TARGET" config-reload
+bash scripts/camera-control.sh -s "$TARGET" config-show
+```
+
+The temporary file is in the same private directory, so the final rename is atomic. If transfer fails before the rename, the previous properties file remains. `config-validate` checks the complete candidate, including device capabilities and required TLS material, without applying it. `config-reload` validates again, then refreshes settings and listeners; errors leave the last effective listeners running. `config-set`, `config-import`, browser saves and direct reload use the same whole-candidate validation; malformed/unknown properties are rejected rather than partially applied. On startup, malformed properties prevent the server from starting; recover over authorized SSH/ADB by restoring a valid file, then run `config-validate` and `config-reload`. Property precedence is simple: present keys override defaults, missing keys use defaults, and no secret is read from `camera.properties`.
+
+For SSH editing without direct shell redirection, `config-export --out camera.properties`, edit the local copy, then `config-import --in camera.properties` validates and atomically installs it. A listener bind failure after a valid candidate is saved is reported as a requested/effective mismatch; it does not claim the new endpoint is active. Fix the address/port conflict and run `network-apply`, or use the recovery path above.
+
+MQTT username and password belong only in the app-private `files/mqtt-credentials.properties` file (UTF-8, both `username` and `password` keys are required or neither; max 2048 bytes). Stage it from a protected host file through stdin, not command arguments:
+
+```sh
+adb -s "$TARGET" shell "run-as local.termux.observatorycamera sh -c 'umask 077; cat > files/mqtt-credentials.properties.tmp && mv files/mqtt-credentials.properties.tmp files/mqtt-credentials.properties'" < mqtt-credentials.properties
+bash scripts/camera-control.sh -s "$TARGET" config-reload
+```
+
+Keep the source file private and delete it securely when no longer needed. Credentials never appear in ordinary exports, APIs or logs. Reload rereads credentials; same-mtime replacement, addition and removal are detected by content, while malformed files are rejected safely. Broker host/port, TLS or topic changes start a distinct reading source; late updates from an old subscription are ignored.
+
+### TLS certificate provisioning
+
+HTTPS serves the same viewer, snapshot, MJPEG and protected admin APIs, with the same request bounds and authentication/origin policy. The viewer, snapshot, MJPEG and public telemetry remain unauthenticated, even over HTTPS. Certificate trust is separate from authentication. A self-signed identity is explicitly generated (it is never regenerated at startup); include every IPv4 address and DNS name clients will use in its SAN:
+
+```sh
+bash scripts/camera-control.sh -s "$TARGET" certificate-generate --san IP:127.0.0.1,DNS:camera.example
+bash scripts/camera-control.sh -s "$TARGET" certificate-status
+bash scripts/camera-control.sh -s "$TARGET" certificate-export --out https-server.pem
+bash scripts/camera-control.sh -s "$TARGET" config-set https_enabled=on https_port=8443
+bash scripts/camera-control.sh -s "$TARGET" network-apply
+```
+
+Add every actual device IPv4 address that clients will use. Generation uses OpenSSL in the authorized shell and stores the PKCS#12 key/password in app-private storage. `certificate-status` displays the SHA-256 fingerprint and expiry; `certificate-export` returns only the public PEM certificate. Browsers will not trust a self-signed certificate automatically. Verify the fingerprint through a trusted channel and install/trust the public certificate on the client, or import a certificate chain from a trusted CA. Expired and untrusted certificates are not silently accepted.
+
+Import a matching server identity in PKCS#12 format. Keep the password in a private host file; the script stages the PKCS#12 and password separately over authorized SSH/ADB stdin and never places password contents in arguments or logs:
+
+```sh
+bash scripts/camera-control.sh -s "$TARGET" certificate-import --in server.p12 --password-file server-password.txt
+bash scripts/camera-control.sh -s "$TARGET" certificate-status
+bash scripts/camera-control.sh -s "$TARGET" config-set https_enabled=on
+bash scripts/camera-control.sh -s "$TARGET" network-apply
+```
+
+The import validates key match, certificate chain and validity before activation; a failed import keeps the last valid identity. Stop an active HTTPS listener before replacing its identity. Browser private-key import is intentionally disabled: do not send private keys over HTTP. The HTTPS route itself can serve the public certificate at `/server-certificate.pem`; it never serves a private key. Do not use `curl -k` or disable TLS verification globally. For a loopback tunnel, match the client authority to a certificate SAN and use the same configured remote port:
+
+```sh
+ssh -p SSH_PORT -L 8443:127.0.0.1:8443 PHONE_IP
+curl --cacert https-server.pem --resolve camera.example:8443:127.0.0.1 https://camera.example:8443/snapshot.jpg
+```
+
+The control script's `start` and `status` probe all requested listeners. HTTPS probes trust the exported public certificate and verify an IP or DNS SAN; loopback/wildcard bindings use ephemeral ADB forwarding without changing the configured Host authority. A missing certificate, wrong SAN, invalid chain or unreachable saved IP is reported rather than treated as success. HTTPS does not imply admin authentication or make HTTP safe: the HTTP admin token remains visible to network observers whenever HTTP is enabled.
 
 ### SSH-only manual checklist
 
@@ -103,7 +167,7 @@ Set TARGET to a verified device and run each step; record fresh output.
 10. Caller restriction: from another installed app (or `adb shell run-as <other uid>`), start ControlActivity and confirm a permission denial; document the result.
 11. Doze/lock screen: record behavior; no guarantee.
 
-Historical 0.7.0 validation: the Java and fake-ADB suites passed, and the APK was compiled and signed against Android API 34 with the pinned MQTT dependencies. That APK was not installed. This is not build evidence for 0.8.0; see [Testing and validation](#testing-and-validation) for current evidence. Phone-specific battery/thermal behavior, camera capture, actual MQTT broker interoperability and browser rendering remain device checks.
+Historical 0.7.0 validation: the Java and fake-ADB suites passed, and the APK was compiled and signed against Android API 34 with the pinned MQTT dependencies. That APK was not installed. This is not build evidence for 0.8.0 or 0.9.0; see [Testing and validation](#testing-and-validation) for current evidence. Phone-specific battery/thermal behavior, camera capture, actual MQTT broker interoperability and browser rendering remain device checks.
 
 ## Continuous capture and overlay
 
@@ -347,7 +411,7 @@ scripts/serve-snapshot.py and docs/snapshot-http.md remain optional development 
 
 ## MJPEG stream and viewer
 
-Read-only endpoints remain unauthenticated, and all HTTP traffic (including the admin bearer token) is unencrypted. This is trusted-LAN-only, not Internet-safe or TLS; never expose it to the Internet.
+Read-only endpoints are unauthenticated over both protocols. HTTP traffic, including the admin bearer token, is unencrypted. HTTPS encrypts transport but does not add authentication; use it with a trusted certificate and never expose either protocol to the Internet.
 
 - `/snapshot.jpg`: unchanged latest complete snapshot.
 - `/stream.mjpg`: `multipart/x-mixed-replace; boundary=observatoryframe`. Each part is `--observatoryframe`, CRLF, `Content-Type: image/jpeg`, CRLF, `Content-Length: N`, CRLF, CRLF, N JPEG bytes, CRLF. Responses carry `Cache-Control: no-store, no-cache, must-revalidate, max-age=0` and `Pragma: no-cache`.
@@ -357,7 +421,7 @@ Read-only endpoints remain unauthenticated, and all HTTP traffic (including the 
 - `GET /api/capabilities`: authenticated list of every JPEG output size from the selected rear Camera2 camera, with per-size minimum-frame duration, JPEG stall duration, informational metadata estimate and whether it is within the app's 8-megapixel resource bound.
 - `PUT /api/config`: authenticated `application/x-www-form-urlencoded` atomic update. Unsupported sizes, invalid FPS syntax/value, invalid fields or bad encoding reject the whole update; existing settings remain unchanged.
 
-The server only reads the atomically published private snapshot (the burned-in overlay is already in it). HTTP never opens the camera, starts capture or creates per-client camera sessions. Read-only viewer/snapshot/stream and telemetry access remains unauthenticated; configuration/capability APIs require the admin bearer token. No cookie auth, permissive CORS or GET mutation is used. Requests require a numeric IPv4 Host authority; mutations additionally require a matching same-origin `Origin`, rejecting DNS hostnames and cross-origin requests. Headers are limited to 8192 bytes and the complete request to 5 s; API bodies to 4096 bytes. No token or broker credential is logged or embedded in HTML.
+The server only reads the atomically published private snapshot (the burned-in overlay is already in it); no listener opens the camera or creates per-client camera sessions. Configuration/capability APIs require the admin bearer token. No cookie auth, permissive CORS or GET mutation is used. HTTP authorities accept IPv4; HTTPS also accepts validated DNS names for certificate SANs. Mutations require a matching same-origin `Origin`. Headers are limited to 8192 bytes and the complete request to 5 s; API bodies to 4096 bytes. No token or broker credential is logged or embedded in HTML.
 
 The app generates a cryptographically random 256-bit token in app-private storage only when explicitly asked through the DUMP-protected SSH/ADB control command. The first call provisions it if absent; subsequent calls retrieve the same value. Rotation replaces it so the old token immediately fails:
 
@@ -366,7 +430,7 @@ bash scripts/camera-control.sh -s "$TARGET" admin-token-show
 bash scripts/camera-control.sh -s "$TARGET" admin-token-rotate
 ```
 
-Treat terminal output as a password: enter it in the viewer's Settings panel, never paste it into a URL, shell history, issue, screenshot or log. The browser keeps it only in page memory; use “Forget token” or reload/close the page to clear it. If the file is absent/corrupt, HTTP admin APIs fail closed until explicit local provisioning/rotation. There is no token reset endpoint. Plain HTTP exposes the token and all camera images/configuration to network observers. The bearer token prevents unauthenticated settings changes, not eavesdropping or image access. This remains trusted-LAN-only, not Internet-safe and not TLS. Do not port-forward it; same-origin checks are not encryption.
+Treat terminal output as a password: enter it only in the viewer's Settings panel over verified HTTPS, never paste it into a URL, shell history, issue, screenshot or log. The browser keeps it only in page memory; use “Forget token” or reload/close the page to clear it. If the file is absent/corrupt, admin APIs fail closed until explicit local provisioning/rotation. Plain HTTP exposes the token and camera traffic to network observers. The bearer token protects settings changes; it does not protect public images or telemetry. Do not port-forward either protocol; same-origin checks are not a substitute for trusted transport.
 
 Stream semantics:
 
@@ -417,15 +481,15 @@ Run the existing automated suites from the repository root:
 bash test/run.sh
 ```
 
-The runner executes 17 dependency-free Java test programs plus `camera-control-test.sh`, `adb-target-test.sh`, and `deploy-test.sh`, using fake ADB/build tools where device actions would otherwise occur. Coverage includes Camera2 capability validation and request mapping, unrestricted requested-FPS parsing, image transforms, overlay and telemetry formatting, MQTT payload and subscription lifecycle, atomic configuration updates, HTTP authorization/request limits, MJPEG framing and server cleanup, and SSH deployment/target selection. The viewer tests inspect the served HTML/CSS/JavaScript and protect key layout invariants; they do not execute the page in a real browser or measure rendered pixels.
+The runner executes 21 dependency-free Java test programs plus `camera-control-test.sh`, `adb-target-test.sh`, and `deploy-test.sh`, using fake ADB/build tools where device actions would otherwise occur. Coverage includes Camera2 capability validation and request mapping, unrestricted requested-FPS parsing, image transforms, overlay and telemetry formatting, MQTT source isolation/credential changes, atomic configuration updates, multi-address binding and rollback, TLS handshake/certificate validation, HTTP authorization/request limits, MJPEG framing and server cleanup, and SSH deployment/target selection. The viewer tests inspect the served HTML/CSS/JavaScript and protect key layout invariants; they do not execute the page in a real browser or measure rendered pixels.
 
-For APK compilation and signing, follow [Build in Termux](#build-in-termux). A successful host test run is not proof of an APK build, install, Samsung camera behavior, browser layout, or live MQTT broker interoperability. The Samsung and browser checklists above are manual tasks and must be run on the intended device/browser before claiming those behaviors.
+For APK compilation and signing, follow [Build in Termux](#build-in-termux). The current runner result and build attempt are recorded in [release readiness](docs/release-readiness-0.9.0.md). A successful host test run is not proof of an APK build, install, Samsung camera behavior, browser layout, or live MQTT broker interoperability.
 
 ## Troubleshooting
 
 | Symptom | Checks |
 | --- | --- |
-| The HTTP server does not start | Allow notifications, check the app status/logcat, and confirm port 8080 is not occupied. Stop the optional Python helper before starting the native service. |
+| The server does not start | Allow notifications, check app status/logcat, then inspect requested versus bound endpoints and certificate status. Confirm each selected address exists, enabled ports are free and distinct, and HTTPS has a valid provisioned identity. Stop the optional Python helper if it occupies a configured port. |
 | Settings cannot load or save | Confirm the native server is running and use the current token from the explicit `admin-token-show` command. Check the returned error and the capability endpoint; unsupported camera values reject the whole candidate without partially saving it. |
 | No new image or capture reports camera busy | Capture needs a resumed, focused activity and camera permission. Stop continuous capture before single capture; a second camera owner is rejected rather than opened. Screen-off, another camera app, privacy controls, or device policy can prevent capture. |
 | Environmental data is disabled, stale, or unavailable | Check that `mqtt_host` is set, the topic and payload match the documented BME280 schema, the source timestamp is current, and TLS/broker access is correct. Credentials, when required, belong only in the private device file—not browser Settings or exported config. |
@@ -459,7 +523,7 @@ The app sets Camera2 JPEG_ORIENTATION from the physical device angle (Orientatio
 
 With the overlay disabled, Camera2 JPEG bytes are saved unchanged (no bitmap rotation or re-encoding); the camera HAL may either rotate the pixels or set the EXIF orientation tag, so use a viewer that honors EXIF. With the overlay enabled the JPEG is decoded, the EXIF orientation is applied exactly once and the result is re-encoded without an EXIF block (implicitly upright; see below). Snapshots taken before this change must be recaptured. Orientation is ambiguous when the device lies flat (the sensor reports unknown), so the last valid angle is used.
 
-For 0.7.0, the APK was compiled and signed with an Android API 34 toolchain; it was not installed or exercised on Samsung hardware, and browser behavior was not validated. That is historical evidence only. Current 0.8.0 test and build evidence is recorded in [Testing and validation](#testing-and-validation); complete the device/browser checklist above in Termux before asserting hardware or browser support.
+For 0.7.0, the APK was compiled and signed with an Android API 34 toolchain; it was not installed or exercised on Samsung hardware, and browser behavior was not validated. That is historical evidence only. Current 0.9.0 evidence is recorded in [Testing and validation](#testing-and-validation) and [release readiness](docs/release-readiness-0.9.0.md); complete the device/browser checklist above before asserting hardware or browser support.
 
 Manual validation on the phone: capture and fetch the HTTP snapshot in a viewer honoring EXIF; it must appear upright in each case:
 1. Portrait.

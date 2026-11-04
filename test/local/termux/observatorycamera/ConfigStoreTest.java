@@ -15,6 +15,9 @@ public final class ConfigStoreTest {
     private static void check(boolean ok, String name) { if (!ok) throw new AssertionError(name); }
     private static void write(File f, String text) throws Exception { Files.write(f.toPath(), text.getBytes(StandardCharsets.UTF_8)); }
     private static String read(File f) throws Exception { return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8); }
+    private static String legacyDescription(CaptureConfig config) {
+        return config.describe().substring(0, config.describe().indexOf(" http_enabled="));
+    }
     private static void deleteTree(File file) {
         if (file == null || !file.exists()) return;
         File[] children = file.listFiles();
@@ -28,6 +31,7 @@ public final class ConfigStoreTest {
         File fresh = null;
         File capabilityDir = null;
         File telemetryDir = null;
+        File networkDir = null;
         try {
         ConfigStore store = new ConfigStore(dir);
         File live = new File(dir, "camera.properties");
@@ -45,7 +49,7 @@ public final class ConfigStoreTest {
         // Update, persistence across a new store instance (service restart / app update keeps filesDir).
         check(store.update("overlay=off target_fps=15.5 position=top-right").config != null, "fractional update ok");
         ConfigStore again = new ConfigStore(dir);
-        check(again.load().config.describe().equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps target_fps=15.5 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), again.load().config.describe());
+        check(legacyDescription(again.load().config).equals("overlay=off location=NYX position=top-right text_size=24 fields=location,datetime,fps target_fps=15.5 jpeg_size=auto text_color=green telemetry_position=right panel_enabled=on panel_text_color=#FF0000 panel_background_color=#000000 panel_text_size=16 panel_environment=on panel_device=on panel_capture=on mqtt_host= mqtt_port=1883 mqtt_topic=homeassistant/nyx/reading mqtt_tls=off mqtt_stale_seconds=120 focus_mode=auto focus_distance_diopters=0.0 exposure_mode=auto exposure_compensation=0 ae_lock=off iso=100 exposure_time_ns=10000000 white_balance=auto awb_lock=off jpeg_quality=90 orientation_mode=auto rotation_degrees=0 mirror=off"), again.load().config.describe());
         check(store.update("target_fps=10").config != null
             && new ConfigStore(dir).load().config.targetFpsString().equals("10.0"), "above-9 target persists across store instances");
         String saved = read(live);
@@ -131,6 +135,27 @@ public final class ConfigStoreTest {
             && !telemetryReloaded.toMap().containsKey("mqtt_password"),
             "credential values are not part of camera.properties settings responses or exports");
 
+        networkDir = Files.createTempDirectory("cfg-network").toFile();
+        ConfigStore networkStore = new ConfigStore(networkDir);
+        ConfigStore.Outcome networkSaved = networkStore.update(
+            "http_enabled=off https_enabled=on https_port=9443 listen_addresses=192.168.10.2,127.0.0.1");
+        CaptureConfig networkReloaded = new ConfigStore(networkDir).load().config;
+        check(networkSaved.config != null && !networkReloaded.httpEnabled && networkReloaded.httpsEnabled
+            && networkReloaded.httpsPort == 9443 && networkReloaded.listenAddresses.equals("127.0.0.1,192.168.10.2"),
+            "network settings survive SSH-style atomic update and properties reload");
+        String networkBefore = read(new File(networkDir, ConfigStore.FILE_NAME));
+        ConfigStore.Outcome rejectedNetwork = networkStore.update("http_enabled=off https_enabled=off");
+        check(rejectedNetwork.config == null && read(new File(networkDir, ConfigStore.FILE_NAME)).equals(networkBefore),
+            "invalid network candidate leaves the persisted file unchanged");
+        write(new File(networkDir, ConfigStore.FILE_NAME),
+            "http_enabled=on\nhttp_port=8080\nhttps_enabled=off\nhttps_port=8443\nlisten_addresses=192.168.10.2,127.0.0.1\n");
+        check(new ConfigStore(networkDir).load().config.listenAddresses.equals("127.0.0.1,192.168.10.2"),
+            "direct properties edits are parsed and canonicalized");
+        write(new File(networkDir, ConfigStore.FILE_NAME),
+            "http_enabled=on\nhttp_port=8080\nhttps_enabled=on\nhttps_port=8080\nlisten_addresses=0.0.0.0\n");
+        check(new ConfigStore(networkDir).load().fileState.equals("corrupt"),
+            "invalid direct network edits retain the last effective valid configuration");
+
         // Invalid imports: whole file rejected, live file untouched, import file removed.
         String before = read(live);
         String[] badImports = {"location=ok\nbogus=1\n", "text_size=500\n", "target_fps=0\n", "target_fps=1.25\n",
@@ -195,6 +220,7 @@ public final class ConfigStoreTest {
             deleteTree(fresh);
             deleteTree(capabilityDir);
             deleteTree(telemetryDir);
+            deleteTree(networkDir);
         }
     }
 }

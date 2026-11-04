@@ -38,15 +38,39 @@ public final class SnapshotHttpService extends Service {
 
     private static volatile boolean running;
     private static volatile String lastError;
+    private static volatile String boundEndpoints = "none";
+    private static volatile String networkError;
+    private static volatile String certificateStatus = "not configured";
     private static volatile Listener listener;
+    private static volatile SnapshotHttpService instance;
 
     public static boolean isRunning() { return running; }
     public static String getLastError() { return lastError; }
+    static String getNetworkError() { return networkError; }
     public static void setListener(Listener value) { listener = value; }
+    static String networkStatus(CaptureConfig requested) {
+        return "Requested: " + describeRequested(requested) + "; bound: " + boundEndpoints
+            + (networkError == null ? "" : "; error: " + networkError) + "; certificate: " + certificateStatus;
+    }
+
+    private static String describeRequested(CaptureConfig config) {
+        java.util.List<String> endpoints = new java.util.ArrayList<>();
+        for (String address : config.listenAddresses.split(",")) {
+            if (config.httpEnabled) endpoints.add("http://" + address + ":" + config.httpPort);
+            if (config.httpsEnabled) endpoints.add("https://" + address + ":" + config.httpsPort);
+        }
+        return String.join(", ", endpoints);
+    }
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private SnapshotHttpServer server;
+    private CaptureConfig serverConfig;
     private String requestId = "-";
+
+    @Override public void onCreate() {
+        super.onCreate();
+        instance = this;
+    }
 
     private static void setState(boolean isRunning, String error) {
         running = isRunning;
@@ -70,7 +94,7 @@ public final class SnapshotHttpService extends Service {
         // Must call startForeground promptly after startForegroundService().
         try {
             createChannel();
-            startForeground(NOTIFICATION_ID, buildNotification("Starting HTTP snapshot server..."));
+            startForeground(NOTIFICATION_ID, buildNotification("Starting camera network listeners..."));
         } catch (RuntimeException e) {
             fail("Could not enter foreground: " + e);
             return;
@@ -81,26 +105,103 @@ public final class SnapshotHttpService extends Service {
             fail("Notifications are disabled; the server is not started without a visible Stop notification.");
             return;
         }
-        if (server == null) {
-            server = new SnapshotHttpServer(new File(getFilesDir(), "snapshot.jpg"), SnapshotHttpServer.DEFAULT_PORT,
-                message -> Log.i(TAG, message), new AdminTokenStore(getFilesDir()), new SnapshotAdminApi(this),
-                () -> new SnapshotHttpServer.ApiResult(200, "OK", TelemetrySnapshot.read(this).toJson()));
-            server.setOnTerminated(() -> main.post(() -> {
-                if (server != null) fail("HTTP server thread ended unexpectedly.");
-            }));
-        }
-        Log.w(TAG, "HTTP is exposed on all IPv4 interfaces without TLS. Trusted LAN only; bearer token is plaintext on this network.");
-        try {
-            server.start();
-        } catch (Exception e) {
-            fail("Could not listen on port " + SnapshotHttpServer.DEFAULT_PORT + ": " + e.getMessage());
+        if (server != null && server.isRunning()) {
+            setState(true, null);
             return;
         }
+        ConfigStore.Loaded loaded = CaptureSettings.store(this).load();
+        if (loaded.fileState.equals("corrupt")) {
+            networkError = "invalid-config-file:" + loaded.error;
+            fail("The settings file is invalid; listeners were not started. " + networkError);
+            return;
+        }
+        CaptureConfig config = loaded.config;
+        serverConfig = config;
+        networkError = null;
+        if (config.httpEnabled)
+            Log.w(TAG, "HTTP is unencrypted and exposes the admin token to network observers. Use only a trusted LAN.");
+        try {
+            server = createServer(config);
+            server.start();
+        } catch (Exception e) {
+            networkError = safeNetworkError(e);
+            fail("Could not apply requested network listeners: " + networkError);
+            return;
+        }
+        boundEndpoints = String.join(", ", server.getBoundEndpoints());
+        certificateStatus = certificateSummary(config);
         TelemetryRuntime.start(this);
-        manager.notify(NOTIFICATION_ID, buildNotification("Listening on port " + server.getLocalPort()
-            + ". Plaintext HTTP; viewer is public: trusted LAN only."));
+        manager.notify(NOTIFICATION_ID, buildNotification("Listening on " + boundEndpoints
+            + ". Viewer and public telemetry remain unauthenticated."));
         setState(true, null);
-        Log.i(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "start", "listening", "port=" + server.getLocalPort()));
+        Log.i(ControlCommand.LOG_TAG, ControlCommand.line(requestId, "start", "listening",
+            "endpoints=" + boundEndpoints.replaceAll("[^A-Za-z0-9:/., -]", "-")));
+    }
+
+    private SnapshotHttpServer createServer(CaptureConfig config) throws Exception {
+        TlsCertificateStore.Identity identity = config.httpsEnabled ? TlsCertificateStore.load(getFilesDir()) : null;
+        if (identity != null) TlsCertificateStore.writePublicCertificate(getFilesDir(), identity);
+        SnapshotHttpServer created = new SnapshotHttpServer(new File(getFilesDir(), "snapshot.jpg"), config,
+            identity == null ? null : identity.context, identity == null ? null : identity.publicPem(),
+            message -> Log.i(TAG, message), new AdminTokenStore(getFilesDir()), new SnapshotAdminApi(this),
+            () -> new SnapshotHttpServer.ApiResult(200, "OK", TelemetrySnapshot.read(this).toJson()));
+        created.setOnTerminated(() -> main.post(() -> {
+            if (server == created) fail("Network listener thread ended unexpectedly.");
+        }));
+        return created;
+    }
+
+    static String applyNetworkSettings(CaptureConfig config) {
+        SnapshotHttpService current = instance;
+        if (current == null || !current.running || current.server == null) return null;
+        return current.replaceNetworkSettings(config);
+    }
+
+    private synchronized String replaceNetworkSettings(CaptureConfig config) {
+        if (sameNetworkConfig(serverConfig, config)) return null;
+        SnapshotHttpServer replacement = null;
+        try {
+            replacement = createServer(config);
+            replacement.start();
+        } catch (Exception e) {
+            if (replacement != null) replacement.stop();
+            networkError = safeNetworkError(e);
+            return networkError;
+        }
+        SnapshotHttpServer previous = server;
+        server = replacement;
+        serverConfig = config;
+        boundEndpoints = String.join(", ", replacement.getBoundEndpoints());
+        certificateStatus = certificateSummary(config);
+        networkError = null;
+        if (previous != null) previous.stop();
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification("Listening on " + boundEndpoints
+            + ". Viewer and public telemetry remain unauthenticated."));
+        return null;
+    }
+
+    private static boolean sameNetworkConfig(CaptureConfig a, CaptureConfig b) {
+        return a != null && a.httpEnabled == b.httpEnabled && a.httpPort == b.httpPort
+            && a.httpsEnabled == b.httpsEnabled && a.httpsPort == b.httpsPort
+            && a.listenAddresses.equals(b.listenAddresses);
+    }
+
+    private static String safeNetworkError(Exception error) {
+        String message = error.getMessage();
+        if (message == null) return "network-configuration-unavailable";
+        return message.replaceAll("[^A-Za-z0-9_.:-]", "-");
+    }
+
+    private static String certificateSummary(CaptureConfig config) {
+        if (!config.httpsEnabled) return "HTTPS disabled";
+        try {
+            TlsCertificateStore.Identity identity = TlsCertificateStore.load(
+                instance == null ? null : instance.getFilesDir());
+            return "SHA-256 " + identity.fingerprint + ", expires " + identity.expiresAt;
+        } catch (Exception e) {
+            return "certificate unavailable";
+        }
     }
 
     private void handleStop() {
@@ -122,7 +223,10 @@ public final class SnapshotHttpService extends Service {
         TelemetryRuntime.stop();
         SnapshotHttpServer current = server;
         server = null;
+        serverConfig = null;
         if (current != null) current.stop();
+        boundEndpoints = "none";
+        certificateStatus = "not serving";
         stopForeground(Service.STOP_FOREGROUND_REMOVE);
     }
 
@@ -131,13 +235,16 @@ public final class SnapshotHttpService extends Service {
         SnapshotHttpServer current = server;
         server = null;
         if (current != null) current.stop();
+        boundEndpoints = "none";
+        certificateStatus = "not serving";
+        if (instance == this) instance = null;
         if (running) setState(false, lastError);
         super.onDestroy();
     }
 
     private void createChannel() {
-        NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "HTTP snapshot server", NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("Shown while the snapshot HTTP server is running.");
+        NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Camera network listeners", NotificationManager.IMPORTANCE_LOW);
+        channel.setDescription("Shown while camera viewer network listeners are running.");
         channel.setShowBadge(false);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
