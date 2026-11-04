@@ -26,6 +26,8 @@ case "$1" in
     exec-out)
         if [[ $2 == run-as && $3 == local.termux.observatorycamera && $4 == cat && $5 == files/http-admin.token ]]; then
             printf '%s' "${FAKE_TOKEN:-}"
+        elif [[ $2 == run-as && $3 == local.termux.observatorycamera && $4 == cat && $5 == files/camera.properties ]]; then
+            if [[ ${FAKE_PROPERTIES+x} ]]; then printf '%s' "$FAKE_PROPERTIES"; else cat "$FAKE_EXPORT" 2>/dev/null </dev/null; fi
         else cat "$FAKE_EXPORT" 2>/dev/null </dev/null; fi ;;
     logcat) cat "$FAKE_LOGCAT" 2>/dev/null </dev/null ;;
     shell)
@@ -204,6 +206,11 @@ else echo "ok certificate password absent from adb command and log output"; fi
 expect certificate-generate-invalid-san 2 "Invalid IP/DNS SAN" -s T certificate-generate --san 'IP:999.2.3.4'
 expect certificate-generate-leading-zero-ip 2 "Invalid IP/DNS SAN" -s T certificate-generate --san 'IP:008.2.3.4'
 expect certificate-generate-invalid-dns 2 "Invalid IP/DNS SAN" -s T certificate-generate --san 'DNS:camera..example'
+expect certificate-generate-missing-openssl 10 "pkg install openssl-tool" -s T certificate-generate --san 'IP:127.0.0.1'
+export FAKE_PROPERTIES=$'http_enabled=off\nhttps_enabled=on\nhttps_port=8443\nlisten_addresses=127.0.0.1'
+FAKE_LOGLINE="cmd=status result=status running=false port=8443 camera=granted notifications=ok"
+expect https-probe-missing-openssl 10 "pkg install openssl-tool" -s T status
+unset FAKE_PROPERTIES
 export FAKE_TOKEN=$(printf 'A%.0s' $(seq 1 43))
 FAKE_LOGLINE="cmd=admin-token-show result=ready token_file=http-admin.token" expect admin-token-show 0 "plaintext HTTP.*$FAKE_TOKEN" -s T --no-wake --timeout 5 admin-token-show
 FAKE_LOGLINE="cmd=admin-token-rotate result=rotated token_file=http-admin.token" expect admin-token-rotate 0 "plaintext HTTP.*$FAKE_TOKEN" -s T --no-wake --timeout 5 admin-token-rotate

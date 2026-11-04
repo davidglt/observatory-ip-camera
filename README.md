@@ -124,6 +124,8 @@ Keep the source file private and delete it securely when no longer needed. Crede
 
 HTTPS serves the same viewer, snapshot, MJPEG and protected admin APIs, with the same request bounds and authentication/origin policy. The viewer, snapshot, MJPEG and public telemetry remain unauthenticated, even over HTTPS. Certificate trust is separate from authentication. A self-signed identity is explicitly generated (it is never regenerated at startup); include every IPv4 address and DNS name clients will use in its SAN:
 
+In the authorized Termux shell where you run the control script, install `openssl-tool` with `pkg install openssl-tool`. It supplies the `openssl` command, and Termux installs its required library dependencies automatically.
+
 ```sh
 bash scripts/camera-control.sh -s "$TARGET" certificate-generate --san IP:127.0.0.1,DNS:camera.example
 bash scripts/camera-control.sh -s "$TARGET" certificate-status

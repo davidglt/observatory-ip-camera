@@ -218,7 +218,7 @@ probe_endpoint() { # scheme address port
             PROBE_DETAIL="${PROBE_DETAIL:+$PROBE_DETAIL, }https://$address:$port=certificate-unavailable"
             return
         fi
-        command -v openssl >/dev/null || die $EX_DEVICE "OpenSSL is required to verify HTTPS certificate hostnames (pkg install openssl)."
+        command -v openssl >/dev/null || die $EX_DEVICE "OpenSSL is required to verify HTTPS certificate hostnames (pkg install openssl-tool)."
         san_dns=$(openssl x509 -in "$CERT_TMP" -noout -ext subjectAltName 2>/dev/null \
             | grep -oE 'DNS:[A-Za-z0-9.-]+' | head -n 1 | cut -d: -f2)
         tls_host=${san_dns:-$probe_address}
@@ -580,7 +580,7 @@ validate_san_list() {
 
 cmd_certificate_generate() {
     validate_san_list || die $EX_USAGE "Invalid IP/DNS SAN entry."
-    command -v openssl >/dev/null || die $EX_DEVICE "OpenSSL is required in the authorized Termux shell (pkg install openssl)."
+    command -v openssl >/dev/null || die $EX_DEVICE "OpenSSL is required in the authorized Termux shell (pkg install openssl-tool)."
     GENERATE_TMP=$(mktemp -d) || die $EX_FAIL "Could not create a private temporary directory."
     chmod 700 "$GENERATE_TMP"
     umask 077
