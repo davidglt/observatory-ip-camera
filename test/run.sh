@@ -33,3 +33,5 @@ echo "Running shell subtest: adb-target-test.sh"
 bash test/adb-target-test.sh
 echo "Running shell subtest: deploy-test.sh"
 bash test/deploy-test.sh
+echo "Running normalized CPU telemetry JSON tests"
+python3 test/telemetry-rest-test.py
