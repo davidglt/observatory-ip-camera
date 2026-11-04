@@ -2,23 +2,42 @@
 
 Native Java Android camera app developed, compiled and signed in Termux. Source, comments, messages and documentation are in English.
 
-## Status: 0.7.0 (Camera2 image controls; device and browser behavior not yet verified)
+## Current release: 0.8.0 (telemetry and Settings layout)
 
-New in 0.7.0: capability-validated focus, exposure, white-balance, JPEG quality and orientation/mirror settings. New in 0.6.0: device and optional BME280 environmental telemetry in a responsive viewer panel and independently configurable JPEG overlays. See "Continuous capture and overlay" below.
+Release 0.8.0 adds grouped Settings sections and responsive telemetry rows with whole-value wrapping and separators between visible telemetry groups. It preserves the 0.7.0 Camera2 image controls and the 0.6.0 device/environment telemetry and independently configurable JPEG overlay.
 
-0.7.0 validation: `bash test/run.sh` passed, and `bash build.sh` compiled and signed the APK with Android API 34 tools. The APK was not installed; Samsung hardware and browser behavior remain unverified.
+The current automated test evidence and limits are in [Testing and validation](#testing-and-validation). No Samsung device or browser is available for this change, so hardware and rendered-browser behavior must be checked using the manual checklist below.
+
+## Guide
+
+- [Build in Termux](#build-in-termux)
+- [Automated deployment, installation, and updates](#automated-deploy-over-ssh-termux)
+- [Manual installation and native service verification](#install-and-test-over-ssh)
+- [Operate the server and camera](#operation-and-security)
+- [SSH administration](#ssh-administration)
+- [Settings](#browser-settings)
+- [Image controls](#camera-image-controls-available-since-070)
+- [MQTT and environmental sensor](#mqtt-and-environmental-sensor)
+- [Troubleshooting](#troubleshooting)
+- [Security](#operation-and-security)
+- [Testing and validation](#testing-and-validation)
+- [License status](#license-status)
+
+## Setup, build, installation, and updates
+
+On the Android device, install the packages and API platform JAR described in [Build in Termux](#build-in-termux). From the repository root, run `bash test/run.sh` and then `bash build.sh`; the latter creates and signs the APK. For a tested ADB target, `bash scripts/deploy.sh -s "$TARGET"` runs tests, builds, installs the new APK with `install -r`, and verifies its package version. It does not grant permissions or start services. See [Automated deploy over SSH](#automated-deploy-over-ssh-termux) and [Manual installation and native service verification](#install-and-test-over-ssh) for target setup and explicit alternatives. Back up the signing identity before updates; never include it in the repository.
 
 Release versioning: increment `versionCode` for every new release and update `versionName` according to the scope of the change. Do not increment either value for every local rebuild.
 
 New in 0.5.0: sustained Camera2 JPEG capture with a burned-in overlay, controlled only over authorized ADB (see "Continuous capture and overlay" below). Everything below about 0.4.0 still applies.
 
-### 0.4.0 baseline
+### 0.4.0 baseline (historical)
 
 Camera2 single JPEG capture plus a native HTTP snapshot server owned by an explicit foreground service (SnapshotHttpService), bound explicitly to 0.0.0.0:8080 (all IPv4 interfaces). No Python server or manual export is required for native HTTP. GET and HEAD /snapshot.jpg read the latest private app snapshot. Requests do not trigger capture. No directory listing is implemented; see "MJPEG stream and viewer" for the stream added afterwards.
 
 The owner validated the previous capture implementation at 1280x720, retrieved the 31671-byte JPEG and verified byte-identical HTTP transfer through the separate Python helper. The native HTTP integration has not yet been built or tested on the phone. MainActivity's existing status text still identifies the capture component as 0.2.0; APK package metadata is 0.4.0 and native HTTP logs use SnapshotHttp.
 
-## Security and lifetime
+## Operation and security
 
 WARNING: While the server is running, the read-only viewer, snapshot and MJPEG routes are unauthenticated and HTTP is unencrypted. The Settings/configuration/capability APIs require the app-private admin bearer token, but HTTP sends that token in plaintext to network observers. Use only a trusted private network; this is trusted-LAN-only, not Internet-safe or TLS. Do not configure router port forwarding or expose it to the Internet. Binding to 0.0.0.0 is not IPv6 support, Internet publication or a guarantee that Android/network policy permits remote access. Use the actual phone address in the browser, not 0.0.0.0.
 
@@ -34,7 +53,7 @@ A foreground service is not a guarantee. Android may still kill the process, and
 
 Connections are handled concurrently with explicit limits (see "MJPEG stream and viewer"). Headers are limited to 8192 bytes and each complete request has a five-second deadline; API request bodies are limited to 4096 bytes. Host/origin checks accept numeric IPv4 authorities only (including `127.0.0.1` for SSH forwarding; DNS names are rejected); API mutations require `PUT`, matching same-origin `Origin`, and bearer auth. No permissive CORS, cookies, or GET mutations are used. Snapshot JPEG size is limited to 16 MiB. Camera writes publish the image using the existing temporary-file rename. The server reads an opened snapshot file and never exposes arbitrary paths. No image bytes or admin tokens are logged. Old snapshots survive restarts and failed capture attempts.
 
-## Non-touch control over SSH (screen broken / no touch)
+## SSH administration
 
 All existing features can be driven without touching the phone, from Termux over SSH via an already authorized adb connection (this document does not cover initial adb pairing, which needs authorization on the device). Use scripts/camera-control.sh. It always requires an explicit device (`-s TARGET` or the TARGET environment variable; the exact serial or host:port from `adb devices`), never auto-selects among several devices, has no hardcoded adb port, and checks that the device state is `device` and the app is installed.
 
@@ -84,7 +103,7 @@ Set TARGET to a verified device and run each step; record fresh output.
 10. Caller restriction: from another installed app (or `adb shell run-as <other uid>`), start ControlActivity and confirm a permission denial; document the result.
 11. Doze/lock screen: record behavior; no guarantee.
 
-Validation status: the automated Java and fake-ADB suites passed, and `bash build.sh` compiled and signed the APK against Android API 34 with the pinned MQTT dependencies. The APK was not installed. Phone-specific battery/thermal behavior, camera capture, actual MQTT broker interoperability and browser rendering have not been verified on a device.
+Historical 0.7.0 validation: the Java and fake-ADB suites passed, and the APK was compiled and signed against Android API 34 with the pinned MQTT dependencies. That APK was not installed. This is not build evidence for 0.8.0; see [Testing and validation](#testing-and-validation) for current evidence. Phone-specific battery/thermal behavior, camera capture, actual MQTT broker interoperability and browser rendering remain device checks.
 
 ## Continuous capture and overlay
 
@@ -122,7 +141,17 @@ NYX is a configurable text label, not GPS; no location permission is used. FPS s
 
 The web viewer has an independent framed telemetry panel outside the image: `telemetry_position=left|right` selects its side on wide screens (default right), and on narrow screens it is always below the image. Settings provide editable RGB hex text and synchronized color pickers for the overlay text, panel text, and panel background independently. The panel defaults to a black background/red text and has independently selectable Environment, Device and Capture groups. Its status polling is read-only and does not request captures or reload the image. `/api/telemetry` is public and bounded like the existing public viewer/snapshot routes; it returns display telemetry and panel appearance only, never broker settings or credentials. The existing config/capability APIs remain bearer-token authenticated.
 
-### Camera image controls (0.7.0)
+### Browser Settings
+
+Open **Settings**, enter the device-admin token, then select **Load settings**. The browser keeps the token in page memory only; it is not placed in a URL, browser storage, settings payload, or exported configuration. Reloading the page or choosing **Forget token** clears it.
+
+Controls are organized as **Capture**, **Image controls**, **Orientation**, **Image overlay**, **Telemetry panel**, and **MQTT / Environmental sensor**. Each section has aligned, responsive columns that collapse to one column on narrow screens. Image controls are shown only when the selected camera advertises them; their Focus, Exposure, and White balance subgroups do not invent unsupported choices.
+
+Save sends the current settings through the same authenticated, full-candidate validation and atomic persistence path used by SSH and import. “Saved.” acknowledges that the settings file was accepted and persisted; it does not claim the camera has applied the values. A validation or write failure is shown as “Not saved” with the error. Requested target FPS is not limited by camera timing estimates; actual FPS and effective settings are reported separately.
+
+Overlay field selection and telemetry group selection are independent. Overlay text color, panel text color, and panel background color are separately editable and each has a synchronized picker. MQTT credentials are never collected by browser Settings; see [MQTT and environmental sensor](#mqtt-and-environmental-sensor) for private credential provisioning.
+
+### Camera image controls (available since 0.7.0)
 
 The authenticated `/api/capabilities` endpoint queries Camera2 characteristics for the same selected rear camera used for capture. Settings show only its advertised AF modes, manual focus range, exposure-compensation range/step, AE/AWB locks, manual sensor ranges and AWB presets. `focus_distance_diopters` uses Camera2 diopters (0 is infinity); a fixed-focus lens is reported without fake focus choices. Manual ISO and `exposure_time_ns` are available only with the Camera2 manual-sensor capability and valid ranges. AE lock/compensation are unavailable in manual exposure, and AWB lock requires automatic white balance. No manual color-temperature control is provided. Unsupported or incoherent updates fail atomically; SSH import/export, `config-set`, web Settings and `camera.properties` use the same schema.
 
@@ -144,7 +173,11 @@ The camera.properties keys `text_color`, `panel_text_color`, `panel_background_c
 
 Each overlay field has its own checkbox. New overlay telemetry fields (environmental Temperature, Humidity and Pressure, Battery level/temperature, Charging status and Thermal status) default off, leaving the previously visible Location/Date-time/FPS unchanged for existing files. Panel group selections do not change overlay selections. Environmental values are burned into JPEG pixels only when the source timestamp is fresh; unavailable or stale values are labeled `--`. Thermal status is an Android severity (`none` through `shutdown`), not a CPU temperature. Processing times and server diagnostics are panel-only. All overlay fields may be unchecked and persist as `fields=none`.
 
+### MQTT and environmental sensor
+
 The optional MQTT subscriber is disabled while `mqtt_host` is empty. Configure broker host, port, topic, TLS and stale threshold in `camera.properties` or Settings; the topic defaults to `homeassistant/nyx/reading`, and the default stale threshold is 120 seconds. Messages are bounded JSON from the existing BME280 producer and must contain finite numeric `timestamp_epoch`, `temperature_c`, `humidity_pct` and `pressure_hpa` within -40..85 C, 0..100 percent and 300..1100 hPa. Altitude is ignored. Age is based on the source timestamp, including retained messages; future timestamps more than 60 seconds ahead are rejected. MQTT reports disabled/connecting/disconnected/waiting/fresh/stale/error states. One client with a stable installation-specific ID distinct from `bme280-nyx` is started only with the explicitly started HTTP service and is stopped with it; it does not start the camera or an Android background service. TLS uses the system trust store and hostname validation.
+
+#### Persistent settings and credentials
 
 Settings are stored in the human-readable UTF-8 file `files/camera.properties` (java.util.Properties format, read and written with explicit UTF-8 Reader/Writer) in app-private storage. It is the single authoritative store: `config-show`, `config-set` and `config-reset` read and update this same file. A commented example with the full schema and defaults is committed as `config/camera.properties.example`; the live device file is never committed (`camera.properties` is git-ignored).
 
@@ -200,7 +233,7 @@ Validation status of this section: `bash test/run.sh` passed, including telemetr
 
 ## Build in Termux
 
-Target: Galaxy S20 FE SM-G780G, Android 13/API 33, One UI 5.1, Termux from Google Play. No root, Gradle, Android Studio, proot or cloud build. Use packages from your existing Termux distribution.
+Documented deployment target (not verified by this host): Galaxy S20 FE SM-G780G, Android 13/API 33, One UI 5.1, Termux from Google Play. No root, Gradle, Android Studio, proot or cloud build. Use packages from your existing Termux distribution.
 
 ```sh
 pkg install git openjdk-21 aapt aapt2 d8 apksigner zip coreutils curl
@@ -308,11 +341,9 @@ To stop the native server and camera process without the UI:
 adb -s "$TARGET" shell am force-stop local.termux.observatorycamera
 ```
 
-## Earlier helper and next work
+## Optional development helper (historical)
 
-scripts/serve-snapshot.py and docs/snapshot-http.md remain for optional isolated testing, not as the normal native serving path. They must use another port if run alongside the APK.
-
-Next: verify the native build, token-protected Settings page, safe resolution reload and actual camera throughput on a device. Exposure and focus convergence still need validation; no preview or autofocus convergence routine is implemented.
+scripts/serve-snapshot.py and docs/snapshot-http.md remain optional development helpers, not the normal native serving path. They must use another port if run alongside the APK. The notes below are historical validation guidance, not current release verification.
 
 ## MJPEG stream and viewer
 
@@ -378,13 +409,41 @@ This checklist is not device validation. Use the existing SSH/ADB control path o
 8. Save/export/import the settings over SSH, reject an unsupported mode and an out-of-range value, and confirm the prior file remains unchanged. Change settings while continuous capture is running; verify one camera owner, sequential frames, no backlog and either next-frame application or clear session/error reporting.
 9. Record actual FPS, processing time, memory and Samsung thermal state during a sustained run. Stop/restart cleanly and repeat after locking the screen or another app taking camera ownership. No performance, background-camera or device behavior is promised until measured.
 
+## Testing and validation
+
+Run the existing automated suites from the repository root:
+
+```sh
+bash test/run.sh
+```
+
+The runner executes 17 dependency-free Java test programs plus `camera-control-test.sh`, `adb-target-test.sh`, and `deploy-test.sh`, using fake ADB/build tools where device actions would otherwise occur. Coverage includes Camera2 capability validation and request mapping, unrestricted requested-FPS parsing, image transforms, overlay and telemetry formatting, MQTT payload and subscription lifecycle, atomic configuration updates, HTTP authorization/request limits, MJPEG framing and server cleanup, and SSH deployment/target selection. The viewer tests inspect the served HTML/CSS/JavaScript and protect key layout invariants; they do not execute the page in a real browser or measure rendered pixels.
+
+For APK compilation and signing, follow [Build in Termux](#build-in-termux). A successful host test run is not proof of an APK build, install, Samsung camera behavior, browser layout, or live MQTT broker interoperability. The Samsung and browser checklists above are manual tasks and must be run on the intended device/browser before claiming those behaviors.
+
+## Troubleshooting
+
+| Symptom | Checks |
+| --- | --- |
+| The HTTP server does not start | Allow notifications, check the app status/logcat, and confirm port 8080 is not occupied. Stop the optional Python helper before starting the native service. |
+| Settings cannot load or save | Confirm the native server is running and use the current token from the explicit `admin-token-show` command. Check the returned error and the capability endpoint; unsupported camera values reject the whole candidate without partially saving it. |
+| No new image or capture reports camera busy | Capture needs a resumed, focused activity and camera permission. Stop continuous capture before single capture; a second camera owner is rejected rather than opened. Screen-off, another camera app, privacy controls, or device policy can prevent capture. |
+| Environmental data is disabled, stale, or unavailable | Check that `mqtt_host` is set, the topic and payload match the documented BME280 schema, the source timestamp is current, and TLS/broker access is correct. Credentials, when required, belong only in the private device file—not browser Settings or exported config. |
+| The viewer wraps differently after resize or zoom | The automated suite checks layout logic but not rendered browser behavior. Record the browser/device and use the manual checklist to test panel side, font size, long values, group combinations, and FPS wrapping. |
+
+Do not include admin tokens, MQTT credentials, signing files, private camera images, or unredacted logs in bug reports.
+
+## License status
+
+This repository currently has no `LICENSE`. Accessible repositories owned by davidglt do not establish one consistent license: `bme280-observatory`, `wireless-debugging`, `retro_selector`, and `sharpcap-sequence-analyzer` use GPL-3.0-or-later, while `bmx280_win` uses Apache-2.0. No license or SPDX header is selected here; a maintainer decision is required before adding the project license and first-party code headers. Third-party notices and licenses must remain separate and unchanged.
+
 ## JPEG orientation
 
 The app sets Camera2 JPEG_ORIENTATION from the physical device angle (OrientationEventListener, rounded to 90 degrees) and the rear camera SENSOR_ORIENTATION: (sensor + device + 360) % 360, with the device angle negated for a front-facing sensor. Display rotation is not used. The last valid angle is kept across pause and activity recreation. With no valid reading yet (cold start) the app logs a fallback (device angle 0, sensor-only behavior); that is not measured orientation. The angle is snapshotted when the capture request is built, and logcat shows sensor, device, JPEG angle and fallback use.
 
 With the overlay disabled, Camera2 JPEG bytes are saved unchanged (no bitmap rotation or re-encoding); the camera HAL may either rotate the pixels or set the EXIF orientation tag, so use a viewer that honors EXIF. With the overlay enabled the JPEG is decoded, the EXIF orientation is applied exactly once and the result is re-encoded without an EXIF block (implicitly upright; see below). Snapshots taken before this change must be recaptured. Orientation is ambiguous when the device lies flat (the sensor reports unknown), so the last valid angle is used.
 
-Pure tests (no Gradle, no Android): `bash test/run.sh` covers orientation math, capability/request mapping, config atomicity and legacy defaults, EXIF/mirror plans, telemetry, overlay settings and SnapshotHttpServer lifecycle/authentication. For 0.7.0 the full APK compiled and signed with the installed Android API 34 toolchain; it was not installed or exercised on Samsung hardware, and browser behavior was not validated. Complete the device/browser checklist above in Termux.
+For 0.7.0, the APK was compiled and signed with an Android API 34 toolchain; it was not installed or exercised on Samsung hardware, and browser behavior was not validated. That is historical evidence only. Current 0.8.0 test and build evidence is recorded in [Testing and validation](#testing-and-validation); complete the device/browser checklist above in Termux before asserting hardware or browser support.
 
 Manual validation on the phone: capture and fetch the HTTP snapshot in a viewer honoring EXIF; it must appear upright in each case:
 1. Portrait.
