@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if ! grep -Eq '<manifest[^>]*android:versionCode="7"[^>]*android:versionName="0\.7\.0"' AndroidManifest.xml; then
-    echo "Release metadata must be versionCode 7 and versionName 0.7.0" >&2
+if ! grep -Eq '<manifest[^>]*android:versionCode="8"[^>]*android:versionName="0\.8\.0"' AndroidManifest.xml; then
+    echo "Release metadata must be versionCode 8 and versionName 0.8.0" >&2
     exit 1
 fi
 OUT=$(mktemp -d)

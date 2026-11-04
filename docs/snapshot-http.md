@@ -1,6 +1,6 @@
 # Termux snapshot HTTP server
 
-This development helper runs in Python inside Termux, not inside the Android APK. It serves the previously exported snapshot.jpg. It does not activate the camera, retrieve private app files, refresh captures or stream video. Device execution is not yet verified. No third-party Python packages are required.
+This optional legacy development helper runs in Python inside Termux, not inside the Android APK. It serves the previously exported snapshot.jpg. It does not activate the camera, retrieve private app files, refresh captures or stream video. The native Android HTTP service is the normal serving path; this helper is useful only for isolated snapshot tests. No third-party Python packages are required.
 
 ## Start locally
 
@@ -49,4 +49,4 @@ After a new successful camera capture, export to a temporary file, then replace 
 adb -s "$TARGET" exec-out run-as local.termux.observatorycamera cat files/snapshot.jpg > snapshot.new.jpg && test -s snapshot.new.jpg && mv snapshot.new.jpg snapshot.jpg
 ```
 
-This copies an existing private snapshot; it does not prove a new capture succeeded. Check capture logs and timestamps first. Keep images private and do not commit them. A future native HTTP server will remove this manual export step.
+This copies an existing private snapshot; it does not prove a new capture succeeded. Check capture logs and timestamps first. Keep images private and do not commit them. The APK's native HTTP service avoids this manual export step during normal use.
