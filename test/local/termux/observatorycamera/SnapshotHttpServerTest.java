@@ -55,6 +55,37 @@ public final class SnapshotHttpServerTest {
         catch (IOException e) { return true; }
     }
 
+    private static void checkViewerScript(String viewerText) throws Exception {
+        int start = viewerText.indexOf("<script nonce=\"") ;
+        start = viewerText.indexOf('>', start) + 1;
+        int end = viewerText.indexOf("</script>", start);
+        File script = File.createTempFile("viewer", ".js");
+        try {
+            Files.write(script.toPath(), viewerText.substring(start, end).getBytes("UTF-8"));
+            check(runNode("--check", script.getPath()), "complete viewer JavaScript parses with node --check");
+            check(runNode("test/local/termux/observatorycamera/viewer-handlers-test.js", script.getPath()),
+                "Settings/About handlers and panel behavior work");
+        } finally {
+            script.delete();
+        }
+    }
+
+    private static boolean runNode(String... args) throws Exception {
+        List<String> command = new ArrayList<String>();
+        command.add("node");
+        command.addAll(Arrays.asList(args));
+        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int n;
+        try (InputStream in = process.getInputStream()) {
+            while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
+        }
+        boolean ok = process.waitFor() == 0;
+        if (!ok) System.err.println(out.toString("UTF-8"));
+        return ok;
+    }
+
     public static void main(String[] args) throws Exception {
         File dir = Files.createTempDirectory("snapshot-test").toFile();
         File image = new File(dir, "snapshot.jpg");
@@ -105,6 +136,13 @@ public final class SnapshotHttpServerTest {
                 && viewerText.contains("X-Frame-Options: DENY")
                 && viewerText.indexOf("Content-Security-Policy:") == viewerText.lastIndexOf("Content-Security-Policy:"),
                 "settings viewer has restrictive security headers");
+            check(viewerText.indexOf("id=\"about-button\"") > viewerText.indexOf("id=\"settings-button\"")
+                && viewerText.indexOf("id=\"about-button\"") < viewerText.indexOf("</header>")
+                && viewerText.contains("<p>Observatory IP Camera</p><p>Copyright (C) 2026 David González López-Tercero</p>"
+                    + "<p>License: GNU General Public License v3.0 or later</p>"
+                    + "<p>SPDX-License-Identifier: GPL-3.0-or-later</p>")
+                && viewerText.contains("id=\"about-close\""), "About button, panel and Close are present");
+            checkViewerScript(viewerText);
             check(!viewerText.contains(token) && viewerText.contains("Forget token")
                 && viewerText.contains("stream.mjpg"), "viewer has no embedded token and preserves stream");
             check(viewerText.contains("<p>Settings require the device-admin token.</p>")
