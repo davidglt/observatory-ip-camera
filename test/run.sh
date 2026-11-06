@@ -35,3 +35,9 @@ echo "Running shell subtest: deploy-test.sh"
 bash test/deploy-test.sh
 echo "Running normalized CPU telemetry JSON tests"
 python3 test/telemetry-rest-test.py
+echo "Running normalized CPU arithmetic tests"
+bash test/cpu-normalization-test.sh
+echo "Running normalized CPU browser renderer tests (Node required)"
+python3 test/normalized-cpu-display-test.py
+echo "Running normalized CPU text panel tests"
+python3 test/normalized-cpu-panel-test.py

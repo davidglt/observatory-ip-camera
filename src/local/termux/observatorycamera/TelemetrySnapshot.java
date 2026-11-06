@@ -155,10 +155,32 @@ final class TelemetrySnapshot {
             lines.add("Charging status: " + charging);
             lines.add("Thermal status: " + thermalStatus);
             lines.add("Application");
-            lines.add("CPU current (% of one core): " + processValue(processMetrics.latest == null
-                ? null : processMetrics.latest.cpuPercent, processMetrics.sampleCount < 2, 2, " %"));
-            lines.add("CPU recent average (% of one core): " + processValue(processMetrics.recentAverageCpuPercent,
-                processMetrics.sampleCount < 2, 2, " %"));
+            // Show normalized CPU percentages
+            if (normalizedCpu.currentPercent == null) {
+                lines.add("CPU current (% of all logical CPUs): " +
+                    (normalizedCpuState().equals("collecting") ? "Collecting" : "Unavailable"));
+            } else {
+                String value = fixed(normalizedCpu.currentPercent, 2) + " %";
+                if (normalizedCpu.stale || normalizedCpuState().equals("stale")) {
+                    value += " (stale)";
+                }
+                lines.add("CPU current (% of all logical CPUs): " + value);
+            }
+            if (normalizedCpu.recentAveragePercent == null) {
+                lines.add("CPU recent average (% of all logical CPUs): " +
+                    (normalizedCpuState().equals("collecting") ? "Collecting" : "Unavailable"));
+            } else {
+                String value = fixed(normalizedCpu.recentAveragePercent, 2) + " %";
+                if (normalizedCpu.stale || normalizedCpuState().equals("stale")) {
+                    value += " (stale)";
+                }
+                lines.add("CPU recent average (% of all logical CPUs): " + value);
+            }
+            if (normalizedCpu.logicalCpuCount == null) {
+                lines.add("Logical CPU count used: Unavailable");
+            } else {
+                lines.add("Logical CPU count used: " + normalizedCpu.logicalCpuCount);
+            }
             lines.add("Current process PSS: " + memoryValue(processMetrics.latest == null
                 ? null : processMetrics.latest.pssKb));
             lines.add("Observed PSS peak: " + memoryValue(processMetrics.observedPeakPssKb));
