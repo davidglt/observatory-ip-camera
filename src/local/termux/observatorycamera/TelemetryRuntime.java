@@ -21,6 +21,7 @@ final class TelemetryRuntime {
     private static final long PROCESS_SAMPLE_INTERVAL_SECONDS = 5;
     private static final EnvironmentalTelemetry ENVIRONMENT = new EnvironmentalTelemetry();
     private static final ProcessMetrics PROCESS_METRICS = new ProcessMetrics();
+    private static Integer sampledLogicalCpuCount;
     private static MqttEnvironmentalSubscriber subscriber;
     private static CaptureConfig activeConfig;
     private static byte[] credentialsFingerprint;
@@ -75,6 +76,16 @@ final class TelemetryRuntime {
         return PROCESS_METRICS.snapshot(SystemClock.elapsedRealtime());
     }
 
+    /** Current and recent average are both relative to the last sampled CPU count.
+     * This is not a capacity-weighted historical average if CPU availability changes.
+     */
+    static synchronized CpuNormalization.Reading normalizedProcessCpu() {
+        ProcessMetrics.Snapshot snapshot = PROCESS_METRICS.snapshot(SystemClock.elapsedRealtime());
+        return new CpuNormalization.Reading(
+            snapshot.latest == null ? null : snapshot.latest.cpuPercent,
+            snapshot.recentAverageCpuPercent, sampledLogicalCpuCount, snapshot.isStale());
+    }
+
     static synchronized long staleMillis() {
         return activeConfig == null ? EnvironmentalTelemetry.DEFAULT_STALE_MILLIS
             : activeConfig.mqttStaleSeconds * 1000L;
@@ -93,6 +104,7 @@ final class TelemetryRuntime {
     private static synchronized void startProcessSampler(Context context) {
         if (processSamplerTask != null && !processSamplerTask.isDone() && !processSampler.isShutdown()) return;
         PROCESS_METRICS.reset();
+        sampledLogicalCpuCount = null;
         processSampler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "observatory-process-telemetry");
             thread.setDaemon(true);
@@ -108,16 +120,23 @@ final class TelemetryRuntime {
         processSampler = null;
         processSamplerTask = null;
         PROCESS_METRICS.reset();
+        sampledLogicalCpuCount = null;
     }
 
-    private static void sampleProcess(Context context) {
+    private static synchronized void sampleProcess(Context context) {
+        if (processSampler == null || processSampler.isShutdown()) return;
         long elapsedMillis = SystemClock.elapsedRealtime();
         long cpuMillis = -1;
+        Integer logicalCpuCount = null;
         Long pssKb = null;
         Long availableRamKb = null;
         Long totalRamKb = null;
         Boolean lowMemory = null;
         try { cpuMillis = Process.getElapsedCpuTime(); } catch (RuntimeException ignored) { }
+        try {
+            int count = Runtime.getRuntime().availableProcessors();
+            if (count > 0) logicalCpuCount = count;
+        } catch (RuntimeException ignored) { }
         try {
             long value = Debug.getPss();
             if (value >= 0) pssKb = value;
@@ -137,6 +156,7 @@ final class TelemetryRuntime {
         catch (RuntimeException ignored) { }
         try {
             PROCESS_METRICS.record(elapsedMillis, cpuMillis, pssKb, availableRamKb, totalRamKb, lowMemory, uptimeMillis);
+            sampledLogicalCpuCount = logicalCpuCount;
         } catch (RuntimeException ignored) { }
     }
 }

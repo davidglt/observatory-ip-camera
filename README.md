@@ -205,7 +205,7 @@ FPS: 0.9 / 1.0
 ```
 NYX is a configurable text label, not GPS; no location permission is used. FPS shows measured actual capture/publication rate followed by the configured target; actual FPS shows `--` until it can be measured. Single capture uses the same overlay with `FPS: -- / 1.0`. The visible-field selection controls Location, Date/time, and FPS; frame counts remain internal diagnostics and are not drawn.
 
-The web viewer has an independent framed telemetry panel outside the image: `telemetry_position=left|right` selects its side on wide screens (default right), and on narrow screens it is always below the image. Settings provide editable RGB hex text and synchronized color pickers for the overlay text, panel text, and panel background independently. The panel defaults to a black background/red text and has independently selectable Environment, Device, Capture and Server groups. Device contains Application and System subsections. Application CPU is the app process's elapsed CPU-time delta divided by monotonic elapsed time, shown as a percentage of one core (so it can exceed 100%); its recent average uses valid samples from the retained history. Process PSS is reported in KB and is not Java heap size. The observed PSS peak is maintained only while the telemetry service is active. System available RAM is Android's available-memory estimate, not strictly free RAM; total RAM and Android's low-memory flag come from `ActivityManager.MemoryInfo`.
+The web viewer has an independent framed telemetry panel outside the image: `telemetry_position=left|right` selects its side on wide screens (default right), and on narrow screens it is always below the image. Settings provide editable RGB hex text and synchronized color pickers for the overlay text, panel text, and panel background independently. The panel defaults to a black background/red text and has independently selectable Environment, Device, Capture and Server groups. Device contains Application and System subsections. Application CPU shows current and recent-average process CPU relative to all logical CPUs available to the process, together with the CPU count used. The raw one-core CPU-time percentage is divided by the last sampled `Runtime.availableProcessors()` count: 100% represents all available logical CPUs. This is CPU-time normalization, not frequency- or performance-weighted hardware capacity. Both values use the last sampled count; the recent average is not historically capacity-weighted when that count changes. Percentages use two decimal places, preserve zero and are not clamped. Missing readings show Collecting only while collecting, otherwise Unavailable; retained numeric readings are marked stale. Legacy REST CPU fields retain their one-core semantics; see [normalized CPU API](docs/normalized-cpu-api.md). Process PSS is reported in KB and is not Java heap size. The observed PSS peak is maintained only while the telemetry service is active. System available RAM is Android's available-memory estimate, not strictly free RAM; total RAM and Android's low-memory flag come from `ActivityManager.MemoryInfo`.
 
 Process/device sampling starts with the HTTP service, is independent of camera capture, and runs once every five seconds without a wake lock. At most ten minutes (up to 121 five-second samples) are retained. The app CPU reading is the most recent valid sample interval; the average is over valid CPU samples in that retained window. Runtime history and the observed PSS peak reset when the telemetry service/process restarts. A sample older than 15 seconds is marked stale; initial or failed values say Collecting or Unavailable rather than implying zero. These are unprivileged Android runtime APIs; the app does not use ADB, root or privileged APIs for these measurements.
 
@@ -544,3 +544,14 @@ Manual validation on the phone: capture and fetch the HTTP snapshot in a viewer 
 6. Pause and return: rotate, background the app, resume, capture; the last angle is preserved until a new reading arrives.
 
 Check with: `adb -s "$TARGET" logcat -d -v time -s ObservatoryCamera:I '*:S' | grep "JPEG orientation"`
+
+### Normalized CPU presentation tests
+
+`bash test/run.sh` also runs CPU normalization arithmetic, 22 extracted
+JavaScript telemetry-renderer scenarios, and six JVM text-panel acceptance
+methods under a German default locale. Node, Python 3 and a JDK supporting
+`javac --release 8` are required for these presentation checks.
+
+The renderer checks use a minimal DOM stub and an explicitly extracted
+telemetry block. They do not validate the full page in a real browser,
+responsive layout, Android APK compilation or device behavior.
