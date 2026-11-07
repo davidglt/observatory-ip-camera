@@ -34,7 +34,12 @@ const fetch = (path, options = {}) => {
         processing_average_ms: '3.0', processing_maximum_ms: '4.0', panel_server: true,
         server_service_state: 'running', server_requested_listeners: 'http://0.0.0.0:8080',
         server_effective_listeners: 'http://127.0.0.1:8080', server_listener_error: 'none',
-        server_active_connections: '1', server_active_streams: '1'
+        server_active_connections: '1', server_active_streams: '1',
+        app_cpu_current_normalized_percent: 45.67,
+        app_cpu_recent_average_normalized_percent: 32.12,
+        app_cpu_logical_count: 8,
+        app_cpu_normalized_stale: false,
+        app_cpu_normalized_state: 'available'
     })});
     return Promise.reject(new Error('offline'));
 };
