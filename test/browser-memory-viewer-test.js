@@ -226,7 +226,66 @@ function normalize(value) {
         console.log('FAIL: partial-field-independence', '-', error.message);
     }
 
-    console.log(JSON.stringify({cases: cases.length + 2, failures}));
+    // Preserve the Q5 scenario with two unavailable fields
+    try {
+        const elements = new Map();
+        const get = id => {
+            if (!elements.has(id)) elements.set(id, element());
+            return elements.get(id);
+        };
+        const data = {
+            app_cpu_current_normalized_percent:25,
+                app_cpu_recent_average_normalized_percent:20,
+                app_cpu_logical_count:8,
+                app_cpu_normalized_stale:false,
+                app_cpu_normalized_state:'available',
+                panel_enabled:true, panel_device:true,
+            panel_environment:false, panel_capture:false, panel_server:false,
+            app_pss_kb: '1000',
+            app_pss_peak_kb: null,
+            system_available_ram_kb: undefined,
+            system_total_ram_kb: '2000'
+        };
+        const context = {
+            $:get,
+            document:{createElement:element},
+            window:{addEventListener() {}},
+            requestAnimationFrame() {},
+            fetch:async () => ({ok:true, json:async () => data})
+        };
+        vm.createContext(context);
+        vm.runInContext(code, context, {timeout:2000});
+        await context.updateTelemetry();
+
+        const rows = allRows(get('telemetry'));
+
+        // Verify all four independent partial readings.
+        const partialExpected = [
+            "1.0 MB", "Unavailable", "Unavailable", "2.0 MB"
+        ];
+        for (let i = 0; i < memoryFields.length; i++) {
+            const label = memoryFields[i].label;
+            const matches = rows.filter(
+                row => row.children[0].textContent === label
+            );
+            assert.strictEqual(
+                matches.length, 1,
+                `Expected one matching row for ${label}`
+            );
+            assert.strictEqual(
+                normalize(matches[0].children[1].textContent),
+                partialExpected[i],
+                `${label} partial value mismatch`
+            );
+        }
+
+        console.log('PASS: partial-two-unavailable-fields');
+    } catch (error) {
+        failures++;
+        console.log('FAIL: partial-two-unavailable-fields', '-', error.message);
+    }
+
+    console.log(JSON.stringify({cases: cases.length + 3, failures}));
     process.exitCode = failures ? 1 : 0;
 })().catch(error => {
     console.error(error);
