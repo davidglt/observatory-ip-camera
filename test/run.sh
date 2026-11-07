@@ -41,3 +41,5 @@ echo "Running normalized CPU browser renderer tests (Node required)"
 python3 test/normalized-cpu-display-test.py
 echo "Running normalized CPU text panel tests"
 python3 test/normalized-cpu-panel-test.py
+echo "Running browser memory renderer tests"
+python3 test/browser-memory-test.py
